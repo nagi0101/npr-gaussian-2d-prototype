@@ -1,0 +1,28 @@
+# Core dependencies
+torch==2.0.1
+torchvision==0.15.2
+numpy==1.24.4
+scipy==1.11.4
+
+# Web framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+websockets==12.0
+python-multipart==0.0.6
+
+# Image processing
+Pillow==10.1.0
+opencv-python==4.8.1.78
+
+# 3D Gaussian Splatting
+# Install separately after environment setup:
+# pip install git+https://github.com/graphdeco-inria/diff-gaussian-rasterization.git
+
+# Optional: Diffusion inpainting (Phase 2)
+# diffusers==0.25.0
+# transformers==4.36.2
+# accelerate==0.25.0
+
+# Utilities
+plyfile==1.0.3
+tqdm==4.66.1
