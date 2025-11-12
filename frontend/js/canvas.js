@@ -6,40 +6,55 @@
 
 class CanvasController {
     constructor(canvasElement, client) {
-        console.log('[Canvas] Initializing CanvasController');
+        console.log("[Canvas] Initializing CanvasController");
         this.canvas = canvasElement;
-        this.ctx = this.canvas.getContext('2d');
+        this.ctx = this.canvas.getContext("2d");
         this.client = client;
 
         this.isDrawing = false;
         this.lastPos = null;
 
-        console.log('[Canvas] Canvas size:', this.canvas.width, 'x', this.canvas.height);
-        console.log('[Canvas] Client connected:', this.client.isConnected);
+        console.log(
+            "[Canvas] Canvas size:",
+            this.canvas.width,
+            "x",
+            this.canvas.height
+        );
+        console.log("[Canvas] Client connected:", this.client.isConnected);
 
         // Setup event listeners
         this.setupEventListeners();
-        console.log('[Canvas] ✓ CanvasController initialized');
+        console.log("[Canvas] ✓ CanvasController initialized");
     }
 
     setupEventListeners() {
-        console.log('[Canvas] Setting up event listeners');
+        console.log("[Canvas] Setting up event listeners");
 
         // Mouse events
-        this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
-        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
-        this.canvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
-        this.canvas.addEventListener('mouseleave', (e) => this.handleMouseLeave(e));
+        this.canvas.addEventListener("mousedown", (e) =>
+            this.handleMouseDown(e)
+        );
+        this.canvas.addEventListener("mousemove", (e) =>
+            this.handleMouseMove(e)
+        );
+        this.canvas.addEventListener("mouseup", (e) => this.handleMouseUp(e));
+        this.canvas.addEventListener("mouseleave", (e) =>
+            this.handleMouseLeave(e)
+        );
 
         // Touch events (for mobile)
-        this.canvas.addEventListener('touchstart', (e) => this.handleTouchStart(e));
-        this.canvas.addEventListener('touchmove', (e) => this.handleTouchMove(e));
-        this.canvas.addEventListener('touchend', (e) => this.handleTouchEnd(e));
+        this.canvas.addEventListener("touchstart", (e) =>
+            this.handleTouchStart(e)
+        );
+        this.canvas.addEventListener("touchmove", (e) =>
+            this.handleTouchMove(e)
+        );
+        this.canvas.addEventListener("touchend", (e) => this.handleTouchEnd(e));
 
         // Prevent context menu
-        this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        this.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
-        console.log('[Canvas] ✓ All event listeners registered');
+        console.log("[Canvas] ✓ All event listeners registered");
     }
 
     getCanvasCoordinates(clientX, clientY) {
@@ -49,14 +64,18 @@ class CanvasController {
 
         return {
             x: (clientX - rect.left) * scaleX,
-            y: (clientY - rect.top) * scaleY
+            y: (clientY - rect.top) * scaleY,
         };
     }
 
     handleMouseDown(e) {
-        console.log('[Canvas] ✓ Mouse down event');
+        console.log("[Canvas] ✓ Mouse down event");
         const pos = this.getCanvasCoordinates(e.clientX, e.clientY);
-        console.log('[Canvas] Canvas coordinates:', pos.x.toFixed(1), pos.y.toFixed(1));
+        console.log(
+            "[Canvas] Canvas coordinates:",
+            pos.x.toFixed(1),
+            pos.y.toFixed(1)
+        );
         this.isDrawing = true;
         this.lastPos = pos;
 
@@ -64,7 +83,7 @@ class CanvasController {
         if (this.client) {
             this.client.startStroke(pos.x, pos.y);
         } else {
-            console.error('[Canvas] ✗ Client is null! Cannot start stroke');
+            console.error("[Canvas] ✗ Client is null! Cannot start stroke");
         }
     }
 
@@ -80,7 +99,7 @@ class CanvasController {
             const distance = Math.sqrt(dx * dx + dy * dy);
 
             if (distance < 2) {
-                return;  // Too close, skip
+                return; // Too close, skip
             }
         }
 
@@ -90,14 +109,14 @@ class CanvasController {
         if (this.client) {
             this.client.updateStroke(pos.x, pos.y);
         } else {
-            console.error('[Canvas] ✗ Client is null! Cannot update stroke');
+            console.error("[Canvas] ✗ Client is null! Cannot update stroke");
         }
     }
 
     handleMouseUp(e) {
         if (!this.isDrawing) return;
 
-        console.log('[Canvas] ✓ Mouse up event');
+        console.log("[Canvas] ✓ Mouse up event");
         this.isDrawing = false;
         this.lastPos = null;
 
@@ -105,7 +124,7 @@ class CanvasController {
         if (this.client) {
             this.client.endStroke();
         } else {
-            console.error('[Canvas] ✗ Client is null! Cannot end stroke');
+            console.error("[Canvas] ✗ Client is null! Cannot end stroke");
         }
     }
 
@@ -120,7 +139,10 @@ class CanvasController {
         e.preventDefault();
         if (e.touches.length > 0) {
             const touch = e.touches[0];
-            this.handleMouseDown({ clientX: touch.clientX, clientY: touch.clientY });
+            this.handleMouseDown({
+                clientX: touch.clientX,
+                clientY: touch.clientY,
+            });
         }
     }
 
@@ -128,7 +150,10 @@ class CanvasController {
         e.preventDefault();
         if (e.touches.length > 0) {
             const touch = e.touches[0];
-            this.handleMouseMove({ clientX: touch.clientX, clientY: touch.clientY });
+            this.handleMouseMove({
+                clientX: touch.clientX,
+                clientY: touch.clientY,
+            });
         }
     }
 
@@ -146,21 +171,28 @@ class CanvasController {
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
             // Draw image
-            this.ctx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
+            this.ctx.drawImage(
+                img,
+                0,
+                0,
+                this.canvas.width,
+                this.canvas.height
+            );
         };
 
         img.onerror = (error) => {
-            console.error('Error loading image:', error);
+            console.error("Error loading image:", error);
         };
 
-        img.src = 'data:image/png;base64,' + base64Image;
+        // Use JPEG for 4-6x faster encoding/transmission
+        img.src = "data:image/jpeg;base64," + base64Image;
     }
 
     clear() {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
         // Fill with white
-        this.ctx.fillStyle = 'white';
+        this.ctx.fillStyle = "white";
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     }
 }

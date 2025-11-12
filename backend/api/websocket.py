@@ -10,7 +10,7 @@ import traceback
 from backend.core.gaussian import Gaussian2D
 from backend.core.brush import BrushStamp, StrokePainter
 from backend.core.renderer import create_renderer
-from backend.utils.helpers import numpy_to_base64_png
+from backend.utils.helpers import numpy_to_base64_jpeg
 from backend.config import config
 
 
@@ -244,8 +244,8 @@ class PaintingSession:
             # Render
             image = self.renderer.render(self.scene_gaussians)
 
-            # Convert to base64 PNG
-            img_base64 = numpy_to_base64_png(image)
+            # Convert to base64 JPEG (4-6x faster than PNG)
+            img_base64 = numpy_to_base64_jpeg(image, quality=85)
 
             # Send to client
             await self.send_message({
