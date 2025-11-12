@@ -105,13 +105,17 @@ class GaussianRenderer2D:
         image = np.ones((self.height, self.width, 3), dtype=np.float32) * self.background_color
         alpha_buffer = np.zeros((self.height, self.width), dtype=np.float32)
 
+        # Debug: Print first 3 Gaussians
+        if len(gaussians) > 0 and len(gaussians) <= 20:  # Only for small counts
+            print(f"[Renderer] First Gaussian: pos={gaussians[0].position[:2]}, color={gaussians[0].color}, opacity={gaussians[0].opacity}")
+
         # Depth sort (painter's algorithm)
         # z=0이지만 opacity에 따라 정렬
         sorted_gaussians = sorted(gaussians, key=lambda g: -g.position[2])
 
         # 각 Gaussian을 렌더링
-        for gaussian in sorted_gaussians:
-            self._render_single_gaussian(gaussian, image, alpha_buffer)
+        for i, gaussian in enumerate(sorted_gaussians):
+            self._render_single_gaussian(gaussian, image, alpha_buffer, debug=(i < 3))
 
         return np.clip(image, 0.0, 1.0)
 
@@ -119,7 +123,8 @@ class GaussianRenderer2D:
         self,
         gaussian: Gaussian2D,
         image: np.ndarray,
-        alpha_buffer: np.ndarray
+        alpha_buffer: np.ndarray,
+        debug: bool = False
     ):
         """
         단일 Gaussian을 이미지에 렌더링 (alpha blending)
@@ -128,10 +133,14 @@ class GaussianRenderer2D:
             gaussian: Gaussian2D object
             image: 렌더링할 이미지 (in-place 수정)
             alpha_buffer: Alpha accumulation buffer
+            debug: If True, print debug info
         """
         # World 좌표 → 픽셀 좌표
         center_pixel = self.world_to_pixel(gaussian.position[:2])
         cx, cy = int(center_pixel[0]), int(center_pixel[1])
+
+        if debug:
+            print(f"[Renderer] Gaussian: world=({gaussian.position[0]:.3f}, {gaussian.position[1]:.3f}), pixel=({cx}, {cy}), color={gaussian.color}, opacity={gaussian.opacity:.2f}")
 
         # Covariance matrix 계산
         cov_world = gaussian.compute_covariance_2d()
@@ -158,7 +167,12 @@ class GaussianRenderer2D:
         y_min = max(0, int(cy - max_radius))
         y_max = min(self.height, int(cy + max_radius) + 1)
 
+        if debug:
+            print(f"[Renderer] Bounding box: x=[{x_min}, {x_max}), y=[{y_min}, {y_max}), radius={max_radius:.1f}")
+
         if x_min >= x_max or y_min >= y_max:
+            if debug:
+                print(f"[Renderer] ✗ Gaussian culled (out of bounds)")
             return  # Culled
 
         # Inverse covariance (for Gaussian evaluation)
@@ -194,9 +208,9 @@ class GaussianRenderer2D:
                 if accumulated_alpha > 0.99:
                     continue  # Already opaque
 
-                # Blend
+                # Blend (correct alpha blending formula)
                 contribution = alpha * (1.0 - accumulated_alpha)
-                image[y, x] += contribution * gaussian.color
+                image[y, x] = image[y, x] * (1.0 - contribution) + gaussian.color * contribution
                 alpha_buffer[y, x] += contribution
 
     def render_with_depth(
@@ -302,6 +316,70 @@ class GaussianRenderer2D:
         image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         cv2.imwrite(filename, image_bgr)
         print(f"Image saved to {filename}")
+
+
+def create_renderer(
+    width: int = 1024,
+    height: int = 768,
+    background_color: np.ndarray = np.array([1.0, 1.0, 1.0]),
+    prefer_gpu: bool = True
+):
+    """
+    Factory function to create renderer with automatic GPU/CPU selection
+
+    Priority:
+    1. GSplat renderer (fastest, native 2D support)
+    2. PyTorch GPU renderer (fallback)
+    3. CPU renderer (final fallback)
+
+    Args:
+        width: Rendering width
+        height: Rendering height
+        background_color: Background RGB [0, 1]
+        prefer_gpu: If True, try GPU renderers first, fallback to CPU
+
+    Returns:
+        Best available renderer based on GPU availability and library availability
+    """
+    if prefer_gpu:
+        # Try gsplat renderer first (best performance)
+        try:
+            import torch
+            if torch.cuda.is_available():
+                from .renderer_gsplat import GaussianRenderer2D_GSplat
+                print(f"[Renderer] Using GSplat renderer (CUDA + gsplat available)")
+                return GaussianRenderer2D_GSplat(
+                    width=width,
+                    height=height,
+                    background_color=background_color
+                )
+        except ImportError:
+            print(f"[Renderer] GSplat not available (pip install gsplat)")
+        except Exception as e:
+            print(f"[Renderer] GSplat renderer failed: {e}")
+
+        # Fallback to PyTorch GPU renderer
+        try:
+            import torch
+            if torch.cuda.is_available():
+                from .renderer_gpu import GaussianRenderer2D_GPU
+                print(f"[Renderer] Using PyTorch GPU renderer (CUDA available)")
+                return GaussianRenderer2D_GPU(
+                    width=width,
+                    height=height,
+                    background_color=background_color
+                )
+        except Exception as e:
+            print(f"[Renderer] GPU renderer failed: {e}")
+            print(f"[Renderer] Falling back to CPU renderer")
+
+    # Final fallback to CPU
+    print(f"[Renderer] Using CPU renderer")
+    return GaussianRenderer2D(
+        width=width,
+        height=height,
+        background_color=background_color
+    )
 
 
 def test_renderer():

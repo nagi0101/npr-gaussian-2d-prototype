@@ -156,49 +156,75 @@ class UIController {
 
 // Initialize everything when page loads
 window.addEventListener('DOMContentLoaded', () => {
-    console.log('Initializing application...');
+    console.log('[App] ========================================');
+    console.log('[App] Starting application initialization');
+    console.log('[App] ========================================');
 
     // Initialize WebSocket client
+    console.log('[App] Step 1: Initializing WebSocket client');
     client = initWebSocketClient();
 
     // Get canvas element
+    console.log('[App] Step 2: Getting canvas element');
     const canvas = document.getElementById('paintCanvas');
+    if (!canvas) {
+        console.error('[App] ✗ Canvas element not found!');
+        return;
+    }
+    console.log('[App] ✓ Canvas element found:', canvas.id);
 
     // Setup client callbacks
+    console.log('[App] Step 3: Setting up WebSocket callbacks');
     client.onConnected = (data) => {
-        console.log('Connected to server:', data);
+        console.log('[App] ========================================');
+        console.log('[App] ✓ WebSocket connected to server');
+        console.log('[App] Session ID:', data.session_id);
+        console.log('[App] ========================================');
+
         uiController.updateConnectionStatus(true);
 
         // Initialize canvas controller
+        console.log('[App] Step 4: Initializing canvas controller');
         canvasController = initCanvasController(canvas, client);
+        console.log('[App] ✓ Canvas controller initialized:', canvasController);
 
         // Setup render callback
+        console.log('[App] Step 5: Setting up render callback');
         client.onRenderUpdate = (image, width, height) => {
+            console.log('[App] Render update received, size:', width, 'x', height);
             canvasController.renderImage(image);
         };
 
         // Setup stats callback
         client.onStatsUpdate = (data) => {
+            console.log('[App] Stats update:', data);
             uiController.updateStats(data);
         };
 
         // Setup error callback
         client.onError = (message) => {
+            console.error('[App] ✗ Error:', message);
             alert('Error: ' + message);
         };
 
         uiController.hideLoading();
+        console.log('[App] ========================================');
+        console.log('[App] ✓ Application ready for painting!');
+        console.log('[App] ========================================');
     };
 
     client.onDisconnected = () => {
+        console.warn('[App] ⚠ Disconnected from server');
         uiController.updateConnectionStatus(false);
         alert('Disconnected from server. Please refresh the page.');
     };
 
     // Initialize UI controller
+    console.log('[App] Step 6: Initializing UI controller');
     const uiController = new UIController(client, null);
 
     uiController.showLoading();
 
-    console.log('Application initialized');
+    console.log('[App] ✓ Application initialization complete');
+    console.log('[App] Waiting for WebSocket connection...');
 });

@@ -44,21 +44,104 @@ eval "$(conda shell.bash hook)"
 conda activate ${ENV_NAME}
 
 echo ""
+echo "======================================"
+echo "  Ensuring PyTorch CUDA Installation"
+echo "======================================"
+echo "Checking current PyTorch installation..."
+python -c "import torch; print(f'Current: {torch.__version__}, CUDA: {torch.cuda.is_available()}')" 2>/dev/null || echo "PyTorch not yet installed"
+
+echo ""
+echo "Installing/Updating PyTorch with CUDA support..."
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+echo ""
+echo "Verifying installation..."
+python -c "
+import torch
+print(f'PyTorch version: {torch.__version__}')
+print(f'CUDA available: {torch.cuda.is_available()}')
+if torch.cuda.is_available():
+    print(f'CUDA version: {torch.version.cuda}')
+    print(f'GPU device: {torch.cuda.get_device_name(0)}')
+else:
+    print('ERROR: CUDA still not available!')
+    exit(1)
+"
+
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "❌ Failed to install PyTorch with CUDA support"
+    echo ""
+    echo "Manual installation required:"
+    echo "  conda activate ${ENV_NAME}"
+    echo "  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121"
+    echo ""
+    read -p "Continue with CPU-only mode? (y/N): " continue_cpu
+    if [[ ! $continue_cpu =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
+echo ""
 echo "Installing pip dependencies..."
 pip install -r requirements.txt
 
 echo ""
 echo "======================================"
-echo "  Optional: GPU Rasterizer"
+echo "  PyTorch CUDA Check"
 echo "======================================"
-read -p "Install diff-gaussian-rasterization (GPU)? (y/N): " install_gpu
+python -c "
+import torch
+print(f'PyTorch version: {torch.__version__}')
+print(f'CUDA available: {torch.cuda.is_available()}')
+if torch.cuda.is_available():
+    print(f'CUDA version: {torch.version.cuda}')
+    print(f'GPU device: {torch.cuda.get_device_name(0)}')
+else:
+    print('⚠️  CUDA not available - CPU mode only')
+" || {
+    echo "❌ Error: PyTorch not installed properly"
+    exit 1
+}
+
+echo ""
+echo "======================================"
+echo "  Optional: gsplat (GPU Rasterizer)"
+echo "======================================"
+echo "gsplat: High-performance Gaussian splatting library"
+echo "  - 50-100 FPS with 1000 Gaussians"
+echo "  - Native 2D orthographic support"
+echo "  - 4x less memory than alternatives"
+echo ""
+read -p "Install gsplat for GPU acceleration? (Y/n): " install_gpu
+
+# Default to Yes if empty
+install_gpu=${install_gpu:-Y}
 
 if [[ $install_gpu =~ ^[Yy]$ ]]; then
-    echo "Installing GPU rasterizer..."
-    pip install git+https://github.com/graphdeco-inria/diff-gaussian-rasterization.git || {
-        echo "⚠️  GPU rasterizer installation failed (may require CUDA toolkit)"
-        echo "Continuing without GPU acceleration..."
-    }
+    # Check if PyTorch has CUDA support
+    HAS_CUDA=$(python -c "import torch; print(torch.cuda.is_available())" 2>/dev/null)
+
+    if [[ "$HAS_CUDA" == "True" ]]; then
+        echo "✓ PyTorch CUDA detected"
+        echo "Installing gsplat..."
+        pip install gsplat || {
+            echo "⚠️  gsplat installation failed"
+            echo "Continuing with CPU-only mode..."
+            echo ""
+            echo "Manual installation:"
+            echo "  pip install gsplat"
+        }
+    else
+        echo "⚠️  PyTorch CUDA not available"
+        echo ""
+        echo "To enable GPU acceleration, reinstall PyTorch with CUDA:"
+        echo "  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121"
+        echo ""
+        echo "Continuing with CPU-only mode..."
+    fi
+else
+    echo "Skipping gsplat installation (CPU-only mode)"
 fi
 
 echo ""

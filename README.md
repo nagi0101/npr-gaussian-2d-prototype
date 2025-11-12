@@ -6,12 +6,12 @@ Interactive painting application using 3D Gaussian Splatting techniques adapted 
 
 ## 🎨 Features
 
-- **Real-time Gaussian Splatting Rendering**: CPU-based 2D Gaussian renderer
-- **Brush-based Painting**: Stamp-based brush system with multiple patterns
-- **Spline-based Strokes**: Smooth stroke paths with cubic spline interpolation
-- **Non-rigid Deformation**: Brush stamps deform along stroke curvature
-- **Interactive WebUI**: Browser-based painting interface
-- **WebSocket Real-time**: Low-latency client-server communication
+-   **Real-time Gaussian Splatting Rendering**: CPU-based 2D Gaussian renderer
+-   **Brush-based Painting**: Stamp-based brush system with multiple patterns
+-   **Spline-based Strokes**: Smooth stroke paths with cubic spline interpolation
+-   **Non-rigid Deformation**: Brush stamps deform along stroke curvature
+-   **Interactive WebUI**: Browser-based painting interface
+-   **WebSocket Real-time**: Low-latency client-server communication
 
 ## 🏗️ Architecture
 
@@ -41,9 +41,9 @@ Interactive painting application using 3D Gaussian Splatting techniques adapted 
 
 ### Prerequisites
 
-- Python 3.10+
-- conda (recommended for environment management)
-- NVIDIA GPU with CUDA 12.2 (for remote server deployment)
+-   Python 3.10+
+-   conda (recommended for environment management)
+-   NVIDIA GPU with CUDA 12.2 (for remote server deployment)
 
 ### Setup
 
@@ -54,28 +54,58 @@ git clone <repository-url>
 cd npr-gaussian-2d-prototype
 ```
 
-#### 2. Create Conda Environment
+#### 2. Use Deployment Script (Recommended)
+
+The deployment script automatically handles PyTorch CUDA installation:
+
+```bash
+chmod +x deploy.sh
+./deploy.sh
+```
+
+This will:
+
+-   Create/update conda environment
+-   **Automatically install PyTorch with CUDA 12.1 support via pip**
+-   Install pip dependencies
+-   Optionally install GPU rasterizer
+-   Start the server
+
+#### 3. Manual Installation (Alternative)
+
+If you prefer manual setup:
+
+**a) Create Conda Environment:**
 
 ```bash
 conda env create -f environment.yml
 conda activate gaussian-brush-2d
 ```
 
-#### 3. Install Dependencies
+**b) Install PyTorch with CUDA:**
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+**c) Verify CUDA:**
+
+```bash
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
+# Should output: CUDA: True
+```
+
+**d) Install pip dependencies:**
 
 ```bash
 pip install -r requirements.txt
 ```
 
-#### 4. (Optional) Install GPU-accelerated Gaussian Rasterizer
-
-For better performance on GPU:
+**e) (Optional) Install GPU-accelerated Gaussian Rasterizer:**
 
 ```bash
-pip install git+https://github.com/graphdeco-inria/diff-gaussian-rasterization.git
+pip install --no-build-isolation git+https://github.com/graphdeco-inria/diff-gaussian-rasterization.git
 ```
-
-**Note**: This requires CUDA toolkit compatible with PyTorch 2.0.1.
 
 ## 🖥️ Running the Application
 
@@ -90,9 +120,10 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 The application will be available at:
-- **Web Interface**: http://localhost:8000
-- **WebSocket**: ws://localhost:8000/ws
-- **Health Check**: http://localhost:8000/health
+
+-   **Web Interface**: http://localhost:8000
+-   **WebSocket**: ws://localhost:8000/ws
+-   **Health Check**: http://localhost:8000/health
 
 ### Remote Server Deployment
 
@@ -116,6 +147,7 @@ nohup python -m backend.main > server.log 2>&1 &
 ```
 
 Access from local machine:
+
 ```
 http://<server-ip>:8000
 ```
@@ -143,11 +175,11 @@ chmod +x deploy.sh
 
 ### Brush Parameters
 
-- **Pattern**: Circular, Line, or Grid arrangement of Gaussians
-- **Size**: Scale factor for brush (0.5 - 3.0)
-- **Spacing**: Distance between stamps along stroke (0.05 - 0.5)
-- **Opacity**: Transparency of Gaussians (0.1 - 1.0)
-- **Color**: RGB color of brush
+-   **Pattern**: Circular, Line, or Grid arrangement of Gaussians
+-   **Size**: Scale factor for brush (0.5 - 3.0)
+-   **Spacing**: Distance between stamps along stroke (0.05 - 0.5)
+-   **Opacity**: Transparency of Gaussians (0.1 - 1.0)
+-   **Color**: RGB color of brush
 
 ### Keyboard Shortcuts
 
@@ -170,13 +202,79 @@ python backend/core/deformation.py
 ## 📊 Performance
 
 **Current Implementation** (CPU-based):
-- Rendering: ~5-10 FPS with 1000 Gaussians
-- Max Gaussians: 100,000 (configurable)
-- Resolution: 1024x768 (configurable)
+
+-   Rendering: ~5-10 FPS with 1000 Gaussians
+-   Max Gaussians: 100,000 (configurable)
+-   Resolution: 1024x768 (configurable)
 
 **Future GPU Implementation**:
-- Expected: 30-60 FPS with 100,000+ Gaussians
-- Real-time deformation and inpainting
+
+-   Expected: 30-60 FPS with 100,000+ Gaussians
+-   Real-time deformation and inpainting
+
+## 🐛 Troubleshooting
+
+### GPU Rasterizer Installation Failed
+
+If GPU rasterizer installation fails, check:
+
+**1. Verify PyTorch CUDA installation**:
+
+```bash
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Version: {torch.version.cuda}')"
+```
+
+Expected output: `CUDA: True, Version: 12.1`
+
+**2. If CUDA is not available**, reinstall PyTorch:
+
+```bash
+conda activate gaussian-brush-2d
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+**3. Retry GPU rasterizer installation**:
+
+```bash
+pip install --no-build-isolation git+https://github.com/graphdeco-inria/diff-gaussian-rasterization.git
+```
+
+### CPU-Only Mode
+
+The application works without GPU rasterizer (CPU rendering):
+
+-   **Performance**: ~5-10 FPS with 1000 Gaussians
+-   **No changes needed**: Just skip GPU rasterizer installation
+-   **Good for**: Testing, small scenes, development
+
+### GPU Mode (Recommended for Production)
+
+With GPU rasterizer:
+
+-   **Performance**: 30-60 FPS with 100,000+ Gaussians
+-   **Requirements**: NVIDIA GPU with CUDA 12.x
+-   **Server specs**: RTX 3090, CUDA 12.2, Driver 535+
+
+### Common Issues
+
+**Issue**: `ModuleNotFoundError: No module named 'torch'` during rasterizer build
+
+-   **Cause**: PyTorch not in build environment
+-   **Solution**: Use `--no-build-isolation` flag (already in deploy.sh)
+
+**Issue**: `TypeError: expected string or bytes-like object` during build
+
+-   **Cause**: PyTorch CPU version installed (torch.version.cuda is None)
+-   **Solution**: Reinstall PyTorch with CUDA support (see step 2 above)
+
+**Issue**: Environment creation fails
+
+-   **Cause**: Channel conflicts or package unavailability
+-   **Solution**:
+    ```bash
+    conda clean --all
+    conda env create -f environment.yml --force
+    ```
 
 ## 🔧 Configuration
 
@@ -200,11 +298,12 @@ class Config:
 ### Gaussian Representation
 
 Each Gaussian is defined by:
-- **Position**: (x, y, 0) - constrained to z=0 plane
-- **Scale**: (sx, sy, sz_min) - z scale minimized for 2D
-- **Rotation**: Quaternion (x, y, z, w)
-- **Opacity**: Float [0, 1]
-- **Color**: RGB [0, 1]
+
+-   **Position**: (x, y, 0) - constrained to z=0 plane
+-   **Scale**: (sx, sy, sz_min) - z scale minimized for 2D
+-   **Rotation**: Quaternion (x, y, z, w)
+-   **Opacity**: Float [0, 1]
+-   **Color**: RGB [0, 1]
 
 ### Rendering Algorithm
 
@@ -225,26 +324,29 @@ Each Gaussian is defined by:
 ## 🛣️ Roadmap
 
 ### Phase 1: MVP (Current)
-- ✅ Basic Gaussian representation
-- ✅ 2D renderer (CPU)
-- ✅ Brush system with patterns
-- ✅ Spline-based strokes
-- ✅ WebSocket real-time communication
-- ✅ Interactive WebUI
+
+-   ✅ Basic Gaussian representation
+-   ✅ 2D renderer (CPU)
+-   ✅ Brush system with patterns
+-   ✅ Spline-based strokes
+-   ✅ WebSocket real-time communication
+-   ✅ Interactive WebUI
 
 ### Phase 2: Advanced Features
-- ⬜ GPU-accelerated rendering (PyTorch/CUDA)
-- ⬜ Non-rigid deformation (implemented but not integrated)
-- ⬜ Diffusion inpainting for seamless strokes
-- ⬜ Multi-stroke blending
-- ⬜ Brush library system
+
+-   ⬜ GPU-accelerated rendering (PyTorch/CUDA)
+-   ⬜ Non-rigid deformation (implemented but not integrated)
+-   ⬜ Diffusion inpainting for seamless strokes
+-   ⬜ Multi-stroke blending
+-   ⬜ Brush library system
 
 ### Phase 3: Production
-- ⬜ Undo/Redo system
-- ⬜ Save/Load scenes
-- ⬜ Export to images/videos
-- ⬜ Performance optimizations
-- ⬜ Mobile support
+
+-   ⬜ Undo/Redo system
+-   ⬜ Save/Load scenes
+-   ⬜ Export to images/videos
+-   ⬜ Performance optimizations
+-   ⬜ Mobile support
 
 ## 📖 References
 
@@ -259,6 +361,7 @@ Each Gaussian is defined by:
 ## 🤝 Contributing
 
 Contributions welcome! Please:
+
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
@@ -270,9 +373,9 @@ This project is for research and educational purposes.
 
 ## 🙏 Acknowledgments
 
-- Paper authors: Karran Pandey, Anita Hu, et al.
-- 3DGS authors: Bernhard Kerbl, et al.
-- NVIDIA for computational resources
+-   Paper authors: Karran Pandey, Anita Hu, et al.
+-   3DGS authors: Bernhard Kerbl, et al.
+-   NVIDIA for computational resources
 
 ## 📧 Contact
 

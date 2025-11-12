@@ -26,33 +26,44 @@ class GaussianPaintClient {
     }
 
     connect() {
-        console.log(`Connecting to ${this.serverUrl}...`);
+        console.log(`[WebSocket] Attempting to connect to ${this.serverUrl}...`);
 
-        this.ws = new WebSocket(this.serverUrl);
+        try {
+            this.ws = new WebSocket(this.serverUrl);
 
-        this.ws.onopen = () => {
-            console.log('WebSocket connected');
-            this.isConnected = true;
-        };
+            this.ws.onopen = () => {
+                console.log('[WebSocket] ✓ Connection opened successfully');
+                this.isConnected = true;
+            };
 
-        this.ws.onmessage = (event) => {
-            this.handleMessage(event);
-        };
+            this.ws.onmessage = (event) => {
+                console.log('[WebSocket] Message received:', event.data.substring(0, 100));
+                this.handleMessage(event);
+            };
 
-        this.ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
+            this.ws.onerror = (error) => {
+                console.error('[WebSocket] ✗ Connection error:', error);
+                console.error('[WebSocket] Server URL:', this.serverUrl);
+                console.error('[WebSocket] Make sure the server is running!');
+                if (this.onError) {
+                    this.onError('WebSocket connection failed. Is the server running?');
+                }
+            };
+
+            this.ws.onclose = (event) => {
+                console.log('[WebSocket] ✗ Connection closed');
+                console.log('[WebSocket] Close code:', event.code, 'Reason:', event.reason);
+                this.isConnected = false;
+                if (this.onDisconnected) {
+                    this.onDisconnected();
+                }
+            };
+        } catch (error) {
+            console.error('[WebSocket] ✗ Failed to create WebSocket:', error);
             if (this.onError) {
-                this.onError('Connection error');
+                this.onError('Failed to create WebSocket connection');
             }
-        };
-
-        this.ws.onclose = () => {
-            console.log('WebSocket disconnected');
-            this.isConnected = false;
-            if (this.onDisconnected) {
-                this.onDisconnected();
-            }
-        };
+        }
     }
 
     disconnect() {
@@ -71,46 +82,51 @@ class GaussianPaintClient {
                 case 'connected':
                     this.sessionId = data.session_id;
                     this.config = data.config;
-                    console.log('Session connected:', this.sessionId);
+                    console.log('[Message] ✓ Session connected:', this.sessionId);
+                    console.log('[Message] Config:', this.config);
                     if (this.onConnected) {
+                        console.log('[Message] Calling onConnected callback');
                         this.onConnected(data);
                     }
                     break;
 
                 case 'render_update':
+                    console.log('[Message] Render update received');
                     this.handleRenderUpdate(data);
                     break;
 
                 case 'stats':
+                    console.log('[Message] Stats update:', data);
                     if (this.onStatsUpdate) {
                         this.onStatsUpdate(data);
                     }
                     break;
 
                 case 'error':
-                    console.error('Server error:', data.message);
+                    console.error('[Message] ✗ Server error:', data.message);
                     if (this.onError) {
                         this.onError(data.message);
                     }
                     break;
 
                 case 'brush_params_updated':
-                    console.log('Brush params updated:', data.params);
+                    console.log('[Message] ✓ Brush params updated:', data.params);
                     break;
 
                 case 'brush_created':
-                    console.log('Brush created:', data.pattern);
+                    console.log('[Message] ✓ Brush created:', data.pattern);
                     break;
 
                 case 'scene_cleared':
-                    console.log('Scene cleared');
+                    console.log('[Message] ✓ Scene cleared');
                     break;
 
                 default:
-                    console.log('Unknown message type:', msgType, data);
+                    console.warn('[Message] ⚠ Unknown message type:', msgType, data);
             }
         } catch (error) {
-            console.error('Error parsing message:', error);
+            console.error('[Message] ✗ Error parsing message:', error);
+            console.error('[Message] Raw data:', event.data);
         }
     }
 
@@ -142,6 +158,7 @@ class GaussianPaintClient {
 
     // Painting actions
     startStroke(x, y) {
+        console.log(`[Stroke] ✓ Start stroke at (${x.toFixed(1)}, ${y.toFixed(1)})`);
         this.isDrawing = true;
         this.send({
             type: 'stroke_start',
@@ -151,8 +168,12 @@ class GaussianPaintClient {
     }
 
     updateStroke(x, y) {
-        if (!this.isDrawing) return;
+        if (!this.isDrawing) {
+            console.warn('[Stroke] ⚠ Update stroke called but not drawing');
+            return;
+        }
 
+        console.log(`[Stroke] Update stroke at (${x.toFixed(1)}, ${y.toFixed(1)})`);
         this.send({
             type: 'stroke_update',
             x: x,
@@ -161,6 +182,7 @@ class GaussianPaintClient {
     }
 
     endStroke() {
+        console.log('[Stroke] ✓ End stroke');
         this.isDrawing = false;
         this.send({
             type: 'stroke_end'

@@ -9,7 +9,7 @@ import traceback
 
 from backend.core.gaussian import Gaussian2D
 from backend.core.brush import BrushStamp, StrokePainter
-from backend.core.renderer import GaussianRenderer2D
+from backend.core.renderer import create_renderer
 from backend.utils.helpers import numpy_to_base64_png
 from backend.config import config
 
@@ -29,14 +29,17 @@ class PaintingSession:
             websocket: WebSocket connection
             session_id: Unique session identifier
         """
+        print(f"[Session {session_id}] Initializing painting session")
         self.ws = websocket
         self.session_id = session_id
 
-        # Renderer
-        self.renderer = GaussianRenderer2D(
+        # Renderer (GPU-accelerated with automatic fallback)
+        print(f"[Session {session_id}] Creating renderer {config.RENDER_WIDTH}x{config.RENDER_HEIGHT}")
+        self.renderer = create_renderer(
             width=config.RENDER_WIDTH,
             height=config.RENDER_HEIGHT,
-            background_color=np.array(config.BACKGROUND_COLOR)
+            background_color=np.array(config.BACKGROUND_COLOR),
+            prefer_gpu=True  # Try GPU first, fallback to CPU
         )
         self.renderer.set_world_bounds(
             np.array(config.WORLD_MIN),
@@ -49,7 +52,9 @@ class PaintingSession:
         self.brush: Optional[BrushStamp] = None
 
         # Initialize default brush
+        print(f"[Session {session_id}] Creating default brush")
         self._create_default_brush()
+        print(f"[Session {session_id}] ✓ Session initialized successfully")
 
     def _create_default_brush(self):
         """Create default circular brush"""
@@ -91,11 +96,12 @@ class PaintingSession:
             elif msg_type == 'request_render':
                 await self.send_render()
             else:
+                print(f"[Session {self.session_id}] ✗ Unknown message type: {msg_type}")
                 await self.send_error(f"Unknown message type: {msg_type}")
 
         except Exception as e:
             error_msg = f"Error handling message: {str(e)}\n{traceback.format_exc()}"
-            print(error_msg)
+            print(f"[Session {self.session_id}] ✗ ERROR: {error_msg}")
             await self.send_error(error_msg)
 
     async def _handle_stroke_start(self, data: dict):
@@ -103,10 +109,12 @@ class PaintingSession:
         # Get position from client (pixel coordinates)
         pixel_x = data.get('x', 0)
         pixel_y = data.get('y', 0)
+        print(f"[Session {self.session_id}] ✓ Stroke start at pixel ({pixel_x:.1f}, {pixel_y:.1f})")
 
         # Convert to world coordinates
         world_pos = self.renderer.pixel_to_world(np.array([pixel_x, pixel_y]))
         position_3d = np.array([world_pos[0], world_pos[1], 0.0])
+        print(f"[Session {self.session_id}] World coordinates: ({world_pos[0]:.3f}, {world_pos[1]:.3f})")
 
         # Default normal (pointing up)
         normal = np.array([0, 0, 1], dtype=np.float32)
@@ -115,6 +123,7 @@ class PaintingSession:
         self.current_painter.start_stroke(position_3d, normal)
 
         # Send render
+        print(f"[Session {self.session_id}] Sending render update")
         await self.send_render()
 
     async def _handle_stroke_update(self, data: dict):
@@ -247,7 +256,7 @@ class PaintingSession:
             })
 
         except Exception as e:
-            print(f"Render error: {e}")
+            print(f"[Session {self.session_id}] ✗ Render error: {e}")
             traceback.print_exc()
 
     async def send_stats(self):
@@ -294,12 +303,14 @@ class ConnectionManager:
         Returns:
             PaintingSession instance
         """
+        print(f"[ConnectionManager] ✓ Accepting WebSocket connection for session {session_id}")
         await websocket.accept()
 
+        print(f"[ConnectionManager] Creating painting session")
         session = PaintingSession(websocket, session_id)
         self.active_sessions[session_id] = session
 
-        print(f"Session {session_id} connected. Total sessions: {len(self.active_sessions)}")
+        print(f"[ConnectionManager] ✓ Session {session_id} connected. Total sessions: {len(self.active_sessions)}")
 
         return session
 

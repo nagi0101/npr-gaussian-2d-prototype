@@ -6,6 +6,7 @@
 
 class CanvasController {
     constructor(canvasElement, client) {
+        console.log('[Canvas] Initializing CanvasController');
         this.canvas = canvasElement;
         this.ctx = this.canvas.getContext('2d');
         this.client = client;
@@ -13,11 +14,17 @@ class CanvasController {
         this.isDrawing = false;
         this.lastPos = null;
 
+        console.log('[Canvas] Canvas size:', this.canvas.width, 'x', this.canvas.height);
+        console.log('[Canvas] Client connected:', this.client.isConnected);
+
         // Setup event listeners
         this.setupEventListeners();
+        console.log('[Canvas] ✓ CanvasController initialized');
     }
 
     setupEventListeners() {
+        console.log('[Canvas] Setting up event listeners');
+
         // Mouse events
         this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
         this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
@@ -31,6 +38,8 @@ class CanvasController {
 
         // Prevent context menu
         this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        console.log('[Canvas] ✓ All event listeners registered');
     }
 
     getCanvasCoordinates(clientX, clientY) {
@@ -45,12 +54,18 @@ class CanvasController {
     }
 
     handleMouseDown(e) {
+        console.log('[Canvas] ✓ Mouse down event');
         const pos = this.getCanvasCoordinates(e.clientX, e.clientY);
+        console.log('[Canvas] Canvas coordinates:', pos.x.toFixed(1), pos.y.toFixed(1));
         this.isDrawing = true;
         this.lastPos = pos;
 
         // Send to server
-        this.client.startStroke(pos.x, pos.y);
+        if (this.client) {
+            this.client.startStroke(pos.x, pos.y);
+        } else {
+            console.error('[Canvas] ✗ Client is null! Cannot start stroke');
+        }
     }
 
     handleMouseMove(e) {
@@ -72,17 +87,26 @@ class CanvasController {
         this.lastPos = pos;
 
         // Send to server
-        this.client.updateStroke(pos.x, pos.y);
+        if (this.client) {
+            this.client.updateStroke(pos.x, pos.y);
+        } else {
+            console.error('[Canvas] ✗ Client is null! Cannot update stroke');
+        }
     }
 
     handleMouseUp(e) {
         if (!this.isDrawing) return;
 
+        console.log('[Canvas] ✓ Mouse up event');
         this.isDrawing = false;
         this.lastPos = null;
 
         // Send to server
-        this.client.endStroke();
+        if (this.client) {
+            this.client.endStroke();
+        } else {
+            console.error('[Canvas] ✗ Client is null! Cannot end stroke');
+        }
     }
 
     handleMouseLeave(e) {
