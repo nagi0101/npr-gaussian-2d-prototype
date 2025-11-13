@@ -10,11 +10,14 @@ Achieves 50-100 FPS on RTX 3090 through:
 
 import torch
 import numpy as np
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from .gaussian import Gaussian2D
+from .debug_visualizer import DebugVisualizer
+import cv2
 
 try:
     from gsplat import rasterization
+
     GSPLAT_AVAILABLE = True
 except ImportError:
     GSPLAT_AVAILABLE = False
@@ -33,7 +36,8 @@ class GaussianRenderer2D_GSplat:
         width: int = 1024,
         height: int = 768,
         background_color: np.ndarray = np.array([1.0, 1.0, 1.0]),
-        device: Optional[str] = None
+        device: Optional[str] = None,
+        debug_mode: bool = False,
     ):
         """
         Args:
@@ -41,24 +45,25 @@ class GaussianRenderer2D_GSplat:
             height: Rendering height (pixels)
             background_color: Background RGB [0, 1]
             device: 'cuda' or 'cpu', auto-detect if None
+            debug_mode: Enable debug visualization
         """
         if not GSPLAT_AVAILABLE:
-            raise ImportError(
-                "gsplat not available. Install with: pip install gsplat"
-            )
+            raise ImportError("gsplat not available. Install with: pip install gsplat")
 
         # Device selection
         if device is None:
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            device = "cuda" if torch.cuda.is_available() else "cpu"
 
         self.device = torch.device(device)
         self.width = width
         self.height = height
 
         print(f"[GSplat Renderer] Initialized on device: {self.device}")
-        if self.device.type == 'cuda':
+        if self.device.type == "cuda":
             print(f"[GSplat Renderer] GPU: {torch.cuda.get_device_name(0)}")
-            print(f"[GSplat Renderer] CUDA Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+            print(
+                f"[GSplat Renderer] CUDA Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB"
+            )
 
         # Background color
         self.background_color = torch.tensor(
@@ -66,11 +71,28 @@ class GaussianRenderer2D_GSplat:
         )
 
         # World space bounds
-        self.world_min = torch.tensor([-1.0, -1.0], dtype=torch.float32, device=self.device)
-        self.world_max = torch.tensor([1.0, 1.0], dtype=torch.float32, device=self.device)
+        self.world_min = torch.tensor(
+            [-1.0, -1.0], dtype=torch.float32, device=self.device
+        )
+        self.world_max = torch.tensor(
+            [1.0, 1.0], dtype=torch.float32, device=self.device
+        )
 
         # Setup orthographic camera
         self._setup_camera()
+
+        # Debug mode
+        self.debug_mode = debug_mode
+        self.debug_visualizer = None
+        if self.debug_mode:
+            # Convert torch tensors to numpy for DebugVisualizer
+            world_min_np = self.world_min.cpu().numpy()
+            world_max_np = self.world_max.cpu().numpy()
+            self.debug_visualizer = DebugVisualizer(
+                width=width, height=height,
+                world_min=world_min_np, world_max=world_max_np
+            )
+            print(f"[GSplat Renderer] Debug mode enabled")
 
     def _setup_camera(self):
         """Setup orthographic camera for 2D rendering"""
@@ -78,12 +100,16 @@ class GaussianRenderer2D_GSplat:
         # Camera at (0, 0, 5) in world space, looking down -Z axis
         # Gaussians at z=0 are transformed to z=+5 in camera space
         # Y-axis flipped to match screen coordinates (Y-down)
-        self.viewmat = torch.tensor([
-            [1.0,  0.0,  0.0, 0.0],
-            [0.0, -1.0,  0.0, 0.0],  # Flip Y-axis for correct orientation
-            [0.0,  0.0,  1.0, 5.0],  # w2c: Translate world +5 in Z to camera space
-            [0.0,  0.0,  0.0, 1.0]
-        ], dtype=torch.float32, device=self.device)
+        self.viewmat = torch.tensor(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0, 0.0],  # Flip Y-axis for correct orientation
+                [0.0, 0.0, 1.0, 5.0],  # w2c: Translate world +5 in Z to camera space
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=torch.float32,
+            device=self.device,
+        )
         self.viewmat = self.viewmat.unsqueeze(0)  # [1, 4, 4] for batch
 
         # Orthographic projection matrix
@@ -110,21 +136,30 @@ class GaussianRenderer2D_GSplat:
         cy = self.height / 2.0
 
         # Intrinsic matrix for orthographic projection
-        K = torch.tensor([
-            [fx,  0.0, cx],
-            [0.0, fy,  cy],
-            [0.0, 0.0, 1.0]
-        ], dtype=torch.float32, device=self.device)
+        K = torch.tensor(
+            [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]],
+            dtype=torch.float32,
+            device=self.device,
+        )
 
         return K.unsqueeze(0)  # [1, 3, 3]
 
     def set_world_bounds(self, world_min: np.ndarray, world_max: np.ndarray):
         """Set world space bounds"""
-        self.world_min = torch.tensor(world_min, dtype=torch.float32, device=self.device)
-        self.world_max = torch.tensor(world_max, dtype=torch.float32, device=self.device)
+        self.world_min = torch.tensor(
+            world_min, dtype=torch.float32, device=self.device
+        )
+        self.world_max = torch.tensor(
+            world_max, dtype=torch.float32, device=self.device
+        )
 
         # Recompute projection matrix
         self.K = self._compute_ortho_projection()
+
+        # Update debug visualizer bounds if exists
+        if self.debug_visualizer:
+            self.debug_visualizer.world_min = world_min
+            self.debug_visualizer.world_max = world_max
 
     def world_to_pixel(self, world_pos: np.ndarray) -> np.ndarray:
         """World coordinates to pixel coordinates (CPU)"""
@@ -138,22 +173,24 @@ class GaussianRenderer2D_GSplat:
 
     def pixel_to_world(self, pixel_pos: np.ndarray) -> np.ndarray:
         """Pixel coordinates to world coordinates (CPU)"""
-        normalized = np.array([
-            pixel_pos[0] / self.width,
-            1.0 - pixel_pos[1] / self.height
-        ])
+        normalized = np.array(
+            [pixel_pos[0] / self.width, 1.0 - pixel_pos[1] / self.height]
+        )
 
         world_size = self.world_max.cpu().numpy() - self.world_min.cpu().numpy()
         world_pos = self.world_min.cpu().numpy() + normalized * world_size
 
         return world_pos
 
-    def render(self, gaussians: List[Gaussian2D]) -> np.ndarray:
+    def render(
+        self, gaussians: List[Gaussian2D], spline_data: Optional[Dict[str, Any]] = None
+    ) -> np.ndarray:
         """
         Render Gaussians to 2D image (gsplat-accelerated)
 
         Args:
             gaussians: List of Gaussian2D objects
+            spline_data: Optional spline visualization data for debug mode
 
         Returns:
             RGB image (height, width, 3) in range [0, 1]
@@ -203,6 +240,7 @@ class GaussianRenderer2D_GSplat:
         # Render using gsplat
         try:
             import time
+
             start_time = time.time()
 
             render_colors, render_alphas, meta = rasterization(
@@ -220,10 +258,10 @@ class GaussianRenderer2D_GSplat:
                 sh_degree=None,
                 camera_model="ortho",  # Orthographic projection for 2D rendering
                 # Critical parameters to prevent culling
-                near_plane=0.1,       # Adjusted near plane (default 0.01)
-                far_plane=10.0,       # Adjusted far plane (default 1e10)
-                radius_clip=0.0,      # Disable radius culling (default may cull small Gaussians)
-                eps2d=0.3            # 2D covariance regularization
+                near_plane=0.1,  # Adjusted near plane (default 0.01)
+                far_plane=10.0,  # Adjusted far plane (default 1e10)
+                radius_clip=0.0,  # Disable radius culling (default may cull small Gaussians)
+                eps2d=0.3,  # 2D covariance regularization
             )
 
             # Extract RGB image
@@ -231,11 +269,11 @@ class GaussianRenderer2D_GSplat:
             if len(render_colors.shape) == 4:
                 # Format: [B, H, W, C] -> [H, W, C]
                 image = render_colors[0]  # Remove batch dimension
-                alpha = render_alphas[0]   # [H, W, 1]
+                alpha = render_alphas[0]  # [H, W, 1]
             elif len(render_colors.shape) == 3:
                 # Format: [C, H, W] -> [H, W, C]
                 image = render_colors.permute(1, 2, 0)  # [H, W, 3]
-                alpha = render_alphas.unsqueeze(-1)      # [H, W, 1]
+                alpha = render_alphas.unsqueeze(-1)  # [H, W, 1]
             else:
                 # Fallback
                 image = render_colors[0]
@@ -246,15 +284,32 @@ class GaussianRenderer2D_GSplat:
 
             elapsed_ms = (time.time() - start_time) * 1000
             fps = 1000 / elapsed_ms if elapsed_ms > 0 else 0
-            print(f"[GSplat Renderer] ✓ {n} Gaussians in {elapsed_ms:.2f}ms ({fps:.1f} FPS)")
+            print(
+                f"[GSplat Renderer] ✓ {n} Gaussians in {elapsed_ms:.2f}ms ({fps:.1f} FPS)"
+            )
 
             # Return to CPU
             result = torch.clamp(image, 0.0, 1.0).cpu().numpy()
+
+            # Add debug overlay if enabled
+            if self.debug_mode and self.debug_visualizer:
+                # Convert float image to uint8 for OpenCV
+                image_uint8 = (np.clip(result, 0.0, 1.0) * 255).astype(np.uint8)
+
+                # Create debug overlay
+                debug_overlay = self.debug_visualizer.create_debug_overlay(
+                    gaussians, image=image_uint8, spline_data=spline_data
+                )
+
+                # Convert back to float
+                result = debug_overlay.astype(np.float32) / 255.0
+
             return result
 
         except Exception as e:
             print(f"[GSplat Renderer] Error during rasterization: {e}")
             import traceback
+
             traceback.print_exc()
 
             # Fallback to background
@@ -262,10 +317,38 @@ class GaussianRenderer2D_GSplat:
                 (self.height, self.width, 3), dtype=np.float32
             )
 
-    def render_with_depth(
-        self,
-        gaussians: List[Gaussian2D]
-    ) -> tuple:
+    def set_debug_mode(self, enabled: bool):
+        """
+        Enable or disable debug mode
+
+        Args:
+            enabled: True to enable debug mode
+        """
+        self.debug_mode = enabled
+        if self.debug_mode and self.debug_visualizer is None:
+            # Convert torch tensors to numpy for DebugVisualizer
+            world_min_np = self.world_min.cpu().numpy()
+            world_max_np = self.world_max.cpu().numpy()
+            self.debug_visualizer = DebugVisualizer(
+                width=self.width, height=self.height,
+                world_min=world_min_np, world_max=world_max_np
+            )
+            print(f"[GSplat Renderer] Debug mode enabled")
+        elif not self.debug_mode:
+            print(f"[GSplat Renderer] Debug mode disabled")
+
+    def set_debug_options(self, options: Dict[str, Any]):
+        """
+        Configure debug visualization options
+
+        Args:
+            options: Dictionary of debug options
+        """
+        if self.debug_visualizer:
+            self.debug_visualizer.set_debug_options(options)
+            print(f"[GSplat Renderer] Debug options updated")
+
+    def render_with_depth(self, gaussians: List[Gaussian2D]) -> tuple:
         """
         Render RGB + depth map
 
@@ -326,16 +409,19 @@ def test_gsplat_renderer():
                 scale=np.array([0.05, 0.05, 1e-4]),
                 rotation=np.array([0.0, 0.0, 0.0, 1.0]),
                 opacity=0.5,
-                color=np.random.uniform(0, 1, 3)
+                color=np.random.uniform(0, 1, 3),
             )
             gaussians.append(g)
 
         import time
+
         start = time.time()
         image = renderer.render(gaussians)
         elapsed = time.time() - start
 
-        print(f"✓ Rendered {count:4d} Gaussians in {elapsed*1000:6.2f}ms ({1/elapsed:5.1f} FPS)")
+        print(
+            f"✓ Rendered {count:4d} Gaussians in {elapsed*1000:6.2f}ms ({1/elapsed:5.1f} FPS)"
+        )
 
     print("GSplat Renderer test complete!")
 

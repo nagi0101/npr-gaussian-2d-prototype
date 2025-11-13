@@ -25,7 +25,7 @@ class GaussianRenderer2D:
         width: int = 1024,
         height: int = 768,
         background_color: np.ndarray = np.array([1.0, 1.0, 1.0]),
-        debug_mode: bool = False
+        debug_mode: bool = False,
     ):
         """
         Args:
@@ -47,7 +47,10 @@ class GaussianRenderer2D:
         self.debug_mode = debug_mode
         self.debug_visualizer = None
         if self.debug_mode:
-            self.debug_visualizer = DebugVisualizer(width=width, height=height)
+            self.debug_visualizer = DebugVisualizer(
+                width=width, height=height,
+                world_min=self.world_min, world_max=self.world_max
+            )
 
     def set_world_bounds(self, world_min: np.ndarray, world_max: np.ndarray):
         """
@@ -59,6 +62,11 @@ class GaussianRenderer2D:
         """
         self.world_min = np.array(world_min, dtype=np.float32)
         self.world_max = np.array(world_max, dtype=np.float32)
+
+        # Update debug visualizer bounds if exists
+        if self.debug_visualizer:
+            self.debug_visualizer.world_min = self.world_min
+            self.debug_visualizer.world_max = self.world_max
 
     def world_to_pixel(self, world_pos: np.ndarray) -> np.ndarray:
         """
@@ -90,17 +98,18 @@ class GaussianRenderer2D:
             (x, y) in world space
         """
         # Y축 뒤집기
-        normalized = np.array([
-            pixel_pos[0] / self.width,
-            1.0 - pixel_pos[1] / self.height
-        ])
+        normalized = np.array(
+            [pixel_pos[0] / self.width, 1.0 - pixel_pos[1] / self.height]
+        )
 
         world_size = self.world_max - self.world_min
         world_pos = self.world_min + normalized * world_size
 
         return world_pos
 
-    def render(self, gaussians: List[Gaussian2D], spline_data: Optional[Dict[str, Any]] = None) -> np.ndarray:
+    def render(
+        self, gaussians: List[Gaussian2D], spline_data: Optional[Dict[str, Any]] = None
+    ) -> np.ndarray:
         """
         Gaussian 리스트를 2D 이미지로 렌더링
 
@@ -112,12 +121,17 @@ class GaussianRenderer2D:
             RGB 이미지 (height, width, 3) in range [0, 1]
         """
         # 초기화: 배경색
-        image = np.ones((self.height, self.width, 3), dtype=np.float32) * self.background_color
+        image = (
+            np.ones((self.height, self.width, 3), dtype=np.float32)
+            * self.background_color
+        )
         alpha_buffer = np.zeros((self.height, self.width), dtype=np.float32)
 
         # Debug: Print first 3 Gaussians
         if len(gaussians) > 0 and len(gaussians) <= 20:  # Only for small counts
-            print(f"[Renderer] First Gaussian: pos={gaussians[0].position[:2]}, color={gaussians[0].color}, opacity={gaussians[0].opacity}")
+            print(
+                f"[Renderer] First Gaussian: pos={gaussians[0].position[:2]}, color={gaussians[0].color}, opacity={gaussians[0].opacity}"
+            )
 
         # Depth sort (painter's algorithm)
         # z=0이지만 opacity에 따라 정렬
@@ -134,9 +148,7 @@ class GaussianRenderer2D:
 
             # Create debug overlay
             debug_overlay = self.debug_visualizer.create_debug_overlay(
-                gaussians,
-                image=image_uint8,
-                spline_data=spline_data
+                gaussians, image=image_uint8, spline_data=spline_data
             )
 
             # Convert back to float
@@ -149,7 +161,7 @@ class GaussianRenderer2D:
         gaussian: Gaussian2D,
         image: np.ndarray,
         alpha_buffer: np.ndarray,
-        debug: bool = False
+        debug: bool = False,
     ):
         """
         단일 Gaussian을 이미지에 렌더링 (alpha blending)
@@ -165,7 +177,9 @@ class GaussianRenderer2D:
         cx, cy = int(center_pixel[0]), int(center_pixel[1])
 
         if debug:
-            print(f"[Renderer] Gaussian: world=({gaussian.position[0]:.3f}, {gaussian.position[1]:.3f}), pixel=({cx}, {cy}), color={gaussian.color}, opacity={gaussian.opacity:.2f}")
+            print(
+                f"[Renderer] Gaussian: world=({gaussian.position[0]:.3f}, {gaussian.position[1]:.3f}), pixel=({cx}, {cy}), color={gaussian.color}, opacity={gaussian.opacity:.2f}"
+            )
 
         # Covariance matrix 계산
         cov_world = gaussian.compute_covariance_2d()
@@ -193,7 +207,9 @@ class GaussianRenderer2D:
         y_max = min(self.height, int(cy + max_radius) + 1)
 
         if debug:
-            print(f"[Renderer] Bounding box: x=[{x_min}, {x_max}), y=[{y_min}, {y_max}), radius={max_radius:.1f}")
+            print(
+                f"[Renderer] Bounding box: x=[{x_min}, {x_max}), y=[{y_min}, {y_max}), radius={max_radius:.1f}"
+            )
 
         if x_min >= x_max or y_min >= y_max:
             if debug:
@@ -235,12 +251,13 @@ class GaussianRenderer2D:
 
                 # Blend (correct alpha blending formula)
                 contribution = alpha * (1.0 - accumulated_alpha)
-                image[y, x] = image[y, x] * (1.0 - contribution) + gaussian.color * contribution
+                image[y, x] = (
+                    image[y, x] * (1.0 - contribution) + gaussian.color * contribution
+                )
                 alpha_buffer[y, x] += contribution
 
     def render_with_depth(
-        self,
-        gaussians: List[Gaussian2D]
+        self, gaussians: List[Gaussian2D]
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         RGB + Depth 맵 반환
@@ -310,7 +327,9 @@ class GaussianRenderer2D:
 
         # Normalize depth
         if depth_map.max() > depth_map.min():
-            depth_map = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
+            depth_map = (depth_map - depth_map.min()) / (
+                depth_map.max() - depth_map.min()
+            )
 
         return rgb, depth_map
 
@@ -351,7 +370,10 @@ class GaussianRenderer2D:
         """
         self.debug_mode = enabled
         if self.debug_mode and self.debug_visualizer is None:
-            self.debug_visualizer = DebugVisualizer(width=self.width, height=self.height)
+            self.debug_visualizer = DebugVisualizer(
+                width=self.width, height=self.height,
+                world_min=self.world_min, world_max=self.world_max
+            )
 
     def set_debug_options(self, options: Dict[str, Any]):
         """
@@ -369,7 +391,7 @@ def create_renderer(
     height: int = 768,
     background_color: np.ndarray = np.array([1.0, 1.0, 1.0]),
     prefer_gpu: bool = True,
-    debug_mode: bool = False
+    debug_mode: bool = False,
 ):
     """
     Factory function to create renderer with automatic GPU/CPU selection
@@ -393,13 +415,16 @@ def create_renderer(
         # Try gsplat renderer first (best performance)
         try:
             import torch
+
             if torch.cuda.is_available():
                 from .renderer_gsplat import GaussianRenderer2D_GSplat
+
                 print(f"[Renderer] Using GSplat renderer (CUDA + gsplat available)")
                 return GaussianRenderer2D_GSplat(
                     width=width,
                     height=height,
-                    background_color=background_color
+                    background_color=background_color,
+                    debug_mode=debug_mode,
                 )
         except ImportError:
             print(f"[Renderer] GSplat not available (pip install gsplat)")
@@ -409,13 +434,13 @@ def create_renderer(
         # Fallback to PyTorch GPU renderer
         try:
             import torch
+
             if torch.cuda.is_available():
                 from .renderer_gpu import GaussianRenderer2D_GPU
+
                 print(f"[Renderer] Using PyTorch GPU renderer (CUDA available)")
                 return GaussianRenderer2D_GPU(
-                    width=width,
-                    height=height,
-                    background_color=background_color
+                    width=width, height=height, background_color=background_color
                 )
         except Exception as e:
             print(f"[Renderer] GPU renderer failed: {e}")
@@ -427,7 +452,7 @@ def create_renderer(
         width=width,
         height=height,
         background_color=background_color,
-        debug_mode=debug_mode
+        debug_mode=debug_mode,
     )
 
 
@@ -443,7 +468,7 @@ def test_renderer():
     for i in range(5):
         x = -0.5 + i * 0.25
         g = create_test_gaussian(x=x, y=0.0)
-        g.color = np.array([i/5.0, 0.5, 1.0 - i/5.0])
+        g.color = np.array([i / 5.0, 0.5, 1.0 - i / 5.0])
         gaussians.append(g)
 
     # 렌더링

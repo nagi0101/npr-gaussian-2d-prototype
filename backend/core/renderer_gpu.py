@@ -10,7 +10,7 @@ Achieves 50-200× speedup on RTX 3090 through:
 
 import torch
 import numpy as np
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from .gaussian import Gaussian2D
 
 
@@ -385,6 +385,27 @@ class GaussianRenderer2D_GPU:
                 depth_map[cy, cx] = max(depth_map[cy, cx], gaussian.position[2])
 
         return rgb, depth_map
+
+    def set_debug_mode(self, enabled: bool):
+        """
+        Stub method for debug mode compatibility
+
+        Args:
+            enabled: True to enable debug mode
+        """
+        if enabled:
+            print("[GPU Renderer] Warning: Debug mode not supported in GPU renderer.")
+            print("[GPU Renderer] Use GSplat renderer for debug visualization.")
+
+    def set_debug_options(self, options: Dict[str, Any]):
+        """
+        Stub method for debug options compatibility
+
+        Args:
+            options: Dictionary of debug options
+        """
+        print("[GPU Renderer] Warning: Debug options not supported in GPU renderer.")
+        print("[GPU Renderer] Use GSplat renderer for debug visualization.")
 
 
 def test_gpu_renderer():

@@ -44,6 +44,8 @@ class UIController {
         this.showSplineFrames = document.getElementById('showSplineFrames');
         this.debugOpacity = document.getElementById('debugOpacity');
         this.debugOpacityValue = document.getElementById('debugOpacityValue');
+        this.basisVectorLength = document.getElementById('basisVectorLength');
+        this.basisVectorLengthValue = document.getElementById('basisVectorLengthValue');
         this.applyDebugBtn = document.getElementById('applyDebugBtn');
 
         // Stats
@@ -114,6 +116,11 @@ class UIController {
             this.debugOpacityValue.textContent = e.target.value;
         });
 
+        // Basis vector length slider
+        this.basisVectorLength.addEventListener('input', (e) => {
+            this.basisVectorLengthValue.textContent = e.target.value;
+        });
+
         // Apply debug settings button
         this.applyDebugBtn.addEventListener('click', () => {
             this.handleApplyDebugSettings();
@@ -177,7 +184,8 @@ class UIController {
             show_gaussian_origins: this.showGaussianOrigins.checked,
             show_basis_vectors: this.showBasisVectors.checked,
             show_spline_frames: this.showSplineFrames.checked,
-            debug_opacity: parseFloat(this.debugOpacity.value)
+            debug_opacity: parseFloat(this.debugOpacity.value),
+            basis_vector_length: parseInt(this.basisVectorLength.value)
         };
 
         console.log('Applying debug options:', options);

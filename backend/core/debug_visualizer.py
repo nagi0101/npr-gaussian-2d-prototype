@@ -20,16 +20,23 @@ class DebugVisualizer:
     Debug visualization for Gaussian splatting painting system
     """
 
-    def __init__(self, width: int = 800, height: int = 600):
+    def __init__(self, width: int = 800, height: int = 600,
+                 world_min: np.ndarray = None, world_max: np.ndarray = None):
         """
         Initialize debug visualizer
 
         Args:
             width: Canvas width
             height: Canvas height
+            world_min: Minimum world coordinates
+            world_max: Maximum world coordinates
         """
         self.width = width
         self.height = height
+
+        # World space bounds (match renderer's coordinate system)
+        self.world_min = world_min if world_min is not None else np.array([-1.0, -1.0])
+        self.world_max = world_max if world_max is not None else np.array([1.0, 1.0])
 
         # Debug settings
         self.show_gaussian_origins = True
@@ -39,19 +46,38 @@ class DebugVisualizer:
         self.debug_opacity = 0.8
 
         # Visualization parameters
-        self.origin_radius = 3
-        self.basis_vector_length = 20
+        self.origin_radius = 4
+        self.basis_vector_length = 50  # Increased from 20 to 50
         self.axis_thickness = 2
 
-        # Colors (BGR for OpenCV)
+        # Colors (BGR for OpenCV) - Darker colors for visibility on white background
         self.colors = {
-            'x_axis': (0, 0, 255),     # Red
-            'y_axis': (0, 255, 0),     # Green
-            'z_axis': (255, 0, 0),     # Blue
-            'origin': (255, 255, 255), # White
-            'spline': (255, 255, 0),   # Cyan
-            'deformation': (255, 0, 255)  # Magenta
+            'x_axis': (0, 0, 200),     # Dark Red
+            'y_axis': (0, 150, 0),     # Dark Green
+            'z_axis': (200, 0, 0),     # Dark Blue
+            'origin': (0, 0, 0),       # Black (was white) - visible on white background
+            'spline': (180, 180, 0),   # Dark Cyan
+            'deformation': (180, 0, 180)  # Dark Magenta
         }
+
+    def world_to_pixel(self, world_pos: np.ndarray) -> np.ndarray:
+        """
+        Convert world coordinates to pixel coordinates
+
+        Args:
+            world_pos: World position [x, y]
+
+        Returns:
+            Pixel position [px, py]
+        """
+        world_size = self.world_max - self.world_min
+        normalized = (world_pos - self.world_min) / world_size
+
+        # Convert to pixel space with Y-flip for screen coordinates
+        px = normalized[0] * self.width
+        py = (1.0 - normalized[1]) * self.height
+
+        return np.array([px, py])
 
     def create_debug_overlay(
         self,
@@ -88,13 +114,21 @@ class DebugVisualizer:
         if self.show_spline_frames and spline_data is not None:
             self._draw_spline_frames(debug_layer, spline_data)
 
-        # Blend debug layer with base image
+        # Blend debug layer with base image using proper alpha compositing
         if image is not None:
-            overlay = cv2.addWeighted(
-                overlay, 1.0,
-                debug_layer, self.debug_opacity,
-                0
-            )
+            # Create mask from non-black pixels in debug_layer
+            debug_mask = np.any(debug_layer > 0, axis=2, keepdims=True).astype(np.float32)
+
+            # Apply opacity to the mask
+            debug_mask = debug_mask * self.debug_opacity
+
+            # Alpha composite: properly blend debug overlay on any background
+            overlay = overlay.astype(np.float32)
+            debug_layer_float = debug_layer.astype(np.float32)
+
+            # Blend: background * (1 - alpha) + foreground * alpha
+            overlay = overlay * (1.0 - debug_mask) + debug_layer_float * debug_mask
+            overlay = np.clip(overlay, 0, 255).astype(np.uint8)
         else:
             overlay = debug_layer
 
@@ -108,10 +142,10 @@ class DebugVisualizer:
             image: Image to draw on
             gaussian: Gaussian to visualize
         """
-        # Convert 3D position to 2D screen coordinates
-        # Assuming orthographic projection for 2D painting
-        origin_x = int(gaussian.position[0] * 100 + self.width / 2)
-        origin_y = int(-gaussian.position[1] * 100 + self.height / 2)  # Flip Y for screen coords
+        # Convert world position to pixel coordinates using proper transformation
+        pixel_pos = self.world_to_pixel(gaussian.position[:2])
+        origin_x = int(pixel_pos[0])
+        origin_y = int(pixel_pos[1])
 
         # Clamp to image bounds
         if not (0 <= origin_x < self.width and 0 <= origin_y < self.height):
@@ -132,8 +166,8 @@ class DebugVisualizer:
             # Get rotation matrix from quaternion
             R = quaternion_to_matrix(gaussian.rotation)
 
-            # Scale basis vectors by Gaussian scale
-            scale_factor = np.mean(gaussian.scale[:2]) * self.basis_vector_length
+            # Use fixed length for debug visibility (not scaled by Gaussian size)
+            scale_factor = self.basis_vector_length
 
             # X axis (red)
             x_axis = R[:, 0]  # First column of rotation matrix
@@ -191,9 +225,10 @@ class DebugVisualizer:
         frames = spline_data['frames']
 
         for pos, (tangent, normal, binormal) in zip(positions, frames):
-            # Convert to screen coordinates
-            screen_x = int(pos[0] * 100 + self.width / 2)
-            screen_y = int(-pos[1] * 100 + self.height / 2)
+            # Convert to screen coordinates using proper transformation
+            pixel_pos = self.world_to_pixel(pos[:2])
+            screen_x = int(pixel_pos[0])
+            screen_y = int(pixel_pos[1])
 
             if not (0 <= screen_x < self.width and 0 <= screen_y < self.height):
                 continue
@@ -299,9 +334,15 @@ class DebugVisualizer:
             gaussian: Gaussian to visualize
             offset_x: X offset for positioning
         """
-        # Adjust position for panel
-        origin_x = int(gaussian.position[0] * 100 + panel.shape[1] / 2)
-        origin_y = int(-gaussian.position[1] * 100 + panel.shape[0] / 2)
+        # Adjust position for panel using proper world-to-pixel transformation
+        # Create temporary world bounds for this panel
+        panel_world_min = self.world_min
+        panel_world_max = self.world_max
+        panel_world_size = panel_world_max - panel_world_min
+        panel_normalized = (gaussian.position[:2] - panel_world_min) / panel_world_size
+
+        origin_x = int(panel_normalized[0] * panel.shape[1])
+        origin_y = int((1.0 - panel_normalized[1]) * panel.shape[0])
 
         # Clamp to panel bounds
         if not (0 <= origin_x < panel.shape[1] and 0 <= origin_y < panel.shape[0]):

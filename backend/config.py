@@ -44,7 +44,7 @@ class Config:
     SHOW_SPLINE_FRAMES: bool = False  # Show spline tangent/normal/binormal frames
     SHOW_DEFORMATION_VECTORS: bool = False  # Show deformation displacement vectors
     DEBUG_OVERLAY_OPACITY: float = 0.8  # Debug overlay opacity (0.0-1.0)
-    BASIS_VECTOR_LENGTH: int = 20  # Length of basis vectors in pixels
+    BASIS_VECTOR_LENGTH: int = 50  # Length of basis vectors in pixels (adjustable)
     DEBUG_AUTO_ENABLE_ON_ERROR: bool = True  # Auto-enable debug when deformation issues detected
 
     # CORS settings
