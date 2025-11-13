@@ -29,6 +29,23 @@ class UIController {
         this.clearSceneBtn = document.getElementById('clearSceneBtn');
         this.requestRenderBtn = document.getElementById('requestRenderBtn');
 
+        // Phase 3 Features
+        this.enableDeformation = document.getElementById('enableDeformation');
+        this.deformationStrength = document.getElementById('deformationStrength');
+        this.deformationStrengthValue = document.getElementById('deformationStrengthValue');
+        this.enableInpainting = document.getElementById('enableInpainting');
+        this.applyFeaturesBtn = document.getElementById('applyFeaturesBtn');
+
+        // Debug controls
+        this.enableDebugMode = document.getElementById('enableDebugMode');
+        this.debugOptions = document.getElementById('debugOptions');
+        this.showGaussianOrigins = document.getElementById('showGaussianOrigins');
+        this.showBasisVectors = document.getElementById('showBasisVectors');
+        this.showSplineFrames = document.getElementById('showSplineFrames');
+        this.debugOpacity = document.getElementById('debugOpacity');
+        this.debugOpacityValue = document.getElementById('debugOpacityValue');
+        this.applyDebugBtn = document.getElementById('applyDebugBtn');
+
         // Stats
         this.statGaussians = document.getElementById('stat-gaussians');
         this.statStrokes = document.getElementById('stat-strokes');
@@ -57,6 +74,11 @@ class UIController {
             this.brushOpacityValue.textContent = e.target.value;
         });
 
+        // Deformation strength slider
+        this.deformationStrength.addEventListener('input', (e) => {
+            this.deformationStrengthValue.textContent = e.target.value;
+        });
+
         // Create brush button
         this.createBrushBtn.addEventListener('click', () => {
             this.handleCreateBrush();
@@ -75,6 +97,26 @@ class UIController {
         // Request render button
         this.requestRenderBtn.addEventListener('click', () => {
             this.client.requestRender();
+        });
+
+        // Apply features button
+        this.applyFeaturesBtn.addEventListener('click', () => {
+            this.handleApplyFeatures();
+        });
+
+        // Debug mode checkbox
+        this.enableDebugMode.addEventListener('change', (e) => {
+            this.handleToggleDebugMode(e.target.checked);
+        });
+
+        // Debug opacity slider
+        this.debugOpacity.addEventListener('input', (e) => {
+            this.debugOpacityValue.textContent = e.target.value;
+        });
+
+        // Apply debug settings button
+        this.applyDebugBtn.addEventListener('click', () => {
+            this.handleApplyDebugSettings();
         });
     }
 
@@ -104,6 +146,42 @@ class UIController {
         if (confirm('Clear entire scene?')) {
             this.client.clearScene();
         }
+    }
+
+    handleApplyFeatures() {
+        const flags = {
+            enable_deformation: this.enableDeformation.checked,
+            deformation_strength: parseFloat(this.deformationStrength.value),
+            enable_inpainting: this.enableInpainting.checked
+        };
+
+        console.log('Applying feature flags:', flags);
+        this.client.setFeatureFlags(flags);
+    }
+
+    handleToggleDebugMode(enabled) {
+        // Show/hide debug options
+        if (enabled) {
+            this.debugOptions.classList.remove('hidden');
+        } else {
+            this.debugOptions.classList.add('hidden');
+        }
+
+        // Send debug mode state to server
+        this.client.setDebugMode(enabled);
+        console.log('Debug mode:', enabled ? 'ON' : 'OFF');
+    }
+
+    handleApplyDebugSettings() {
+        const options = {
+            show_gaussian_origins: this.showGaussianOrigins.checked,
+            show_basis_vectors: this.showBasisVectors.checked,
+            show_spline_frames: this.showSplineFrames.checked,
+            debug_opacity: parseFloat(this.debugOpacity.value)
+        };
+
+        console.log('Applying debug options:', options);
+        this.client.setDebugOptions(options);
     }
 
     hexToRgb(hex) {

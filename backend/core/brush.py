@@ -9,6 +9,8 @@ import numpy as np
 from typing import List, Optional, Tuple
 from .gaussian import Gaussian2D
 from .spline import StrokeSpline
+from .deformation import apply_deformation_to_stroke
+from .inpainting import blend_overlapping_stamps
 import copy
 
 
@@ -280,8 +282,12 @@ class StrokePainter:
         self.brush = brush
         self.scene = scene_gaussians if scene_gaussians is not None else []
         self.current_stroke: Optional[StrokeSpline] = None
-        self.placed_stamps: List[List[Gaussian2D]] = []
+        # Store (gaussians, arc_length) tuples to preserve placement info
+        self.placed_stamps: List[Tuple[List[Gaussian2D], float]] = []
+        # Store original stamps for deformation (position, tangent, normal, arc_length)
+        self.stamp_placements: List[Tuple[np.ndarray, np.ndarray, np.ndarray, float]] = []
         self.last_stamp_arc_length: float = 0.0
+        self.current_stroke_start_index: int = 0
 
     def start_stroke(self, position: np.ndarray, normal: np.ndarray):
         """
@@ -291,10 +297,13 @@ class StrokePainter:
             position: 3D starting position
             normal: Surface normal
         """
-        self.current_stroke = StrokeSpline()
+        # Create spline with 2D constraint for canvas painting
+        self.current_stroke = StrokeSpline(force_2d=True)
         self.current_stroke.add_point(position, normal, threshold=0.0)
         self.placed_stamps = []
+        self.stamp_placements = []
         self.last_stamp_arc_length = 0.0
+        self.current_stroke_start_index = len(self.scene)
 
     def update_stroke(self, position: np.ndarray, normal: np.ndarray):
         """
@@ -322,6 +331,8 @@ class StrokePainter:
         if self.current_stroke is None:
             return
 
+        from backend.config import config
+
         total_length = self.current_stroke.total_arc_length
         spacing = self.brush.spacing
 
@@ -334,35 +345,171 @@ class StrokePainter:
             tangent = self.current_stroke.get_tangent_at_arc_length(arc_length)
             normal = self.current_stroke.get_normal_at_arc_length(arc_length)
 
-            # Place stamp
-            stamp_gaussians = self.brush.place_at(position, tangent, normal)
+            if config.ENABLE_DEFORMATION:
+                # Store placement info for deformation phase - don't apply rigid transform yet
+                self.stamp_placements.append((position, tangent, normal, arc_length))
 
-            # Store stamp
-            self.placed_stamps.append(stamp_gaussians)
+                # Create placeholder stamps (original brush-local coordinates)
+                # Deep copy to preserve original coordinates
+                placeholder_stamps = [g.copy() for g in self.brush.gaussians]
+                self.placed_stamps.append((placeholder_stamps, arc_length))
 
-            # Add to scene
-            self.scene.extend(stamp_gaussians)
+                # For immediate visualization, place them rigidly (will be replaced in finish_stroke)
+                temp_stamps = self.brush.place_at(position, tangent, normal)
+                self.scene.extend(temp_stamps)
+            else:
+                # Normal rigid placement when deformation is disabled
+                stamp_gaussians = self.brush.place_at(position, tangent, normal)
+                self.placed_stamps.append((stamp_gaussians, arc_length))
+                self.scene.extend(stamp_gaussians)
 
             arc_length += spacing
 
         # Update last stamp position
         self.last_stamp_arc_length = arc_length - spacing
 
-    def finish_stroke(self):
+    def finish_stroke(self, enable_deformation: bool = False, enable_inpainting: bool = False):
         """
         Finish current stroke
 
-        여기서 deformation이나 inpainting 적용 가능 (Phase 2)
+        Phase 3: Apply deformation and/or inpainting
+
+        Args:
+            enable_deformation: Apply non-rigid deformation
+            enable_inpainting: Apply overlap inpainting
         """
         if self.current_stroke is None:
             return
 
-        # TODO: Apply non-rigid deformation
-        # TODO: Apply diffusion inpainting
+        # Phase 3-2: Apply non-rigid deformation
+        if enable_deformation and len(self.placed_stamps) > 0:
+            from backend.config import config
+            deformation_strength = config.DEFORMATION_STRENGTH
+
+            print(f"[Deformation] Applying deformation to {len(self.placed_stamps)} stamps (strength={deformation_strength:.2f})")
+
+            # Remove temporarily placed rigid stamps from scene
+            del self.scene[self.current_stroke_start_index:]
+
+            # Apply deformation using original brush coordinates and placement info
+            stamp_frame = (self.brush.tangent, self.brush.normal, self.brush.binormal)
+
+            deformed_stamps = []
+
+            # Use stamp_placements for deformation if available (when ENABLE_DEFORMATION was true during placement)
+            if len(self.stamp_placements) > 0:
+                # Extract original brush-local stamps and placement info
+                stamps_only = [gaussians for gaussians, _ in self.placed_stamps]
+
+                for i, (stamp, (position, tangent, normal, arc_length)) in enumerate(zip(stamps_only, self.stamp_placements)):
+                    from .deformation import deform_stamp_along_spline
+
+                    # Apply deformation to original brush-local coordinates
+                    deformed = deform_stamp_along_spline(
+                        stamp,  # Original brush-local coordinates
+                        self.brush.center,
+                        stamp_frame,
+                        self.current_stroke,
+                        arc_length,
+                        position,
+                        tangent,
+                        normal
+                    )
+
+                    # Apply deformation strength by blending
+                    if deformation_strength < 1.0:
+                        # For partial deformation, blend between rigid placement and deformation
+                        rigid_placed = self.brush.place_at(position, tangent, normal)
+
+                        for rigid, deform in zip(rigid_placed, deformed):
+                            # Blend position
+                            deform.position = (1.0 - deformation_strength) * rigid.position + deformation_strength * deform.position
+                            # Blend rotation using quaternion slerp
+                            from .quaternion_utils import quaternion_slerp
+                            deform.rotation = quaternion_slerp(rigid.rotation, deform.rotation, deformation_strength)
+
+                    deformed_stamps.append(deformed)
+            else:
+                # Fallback: Use placed stamps (old behavior, less accurate)
+                print("[Deformation] Warning: Using fallback deformation (less accurate)")
+                stamps_only = [gaussians for gaussians, _ in self.placed_stamps]
+                arc_lengths = [arc_len for _, arc_len in self.placed_stamps]
+
+                for i, (stamp, arc_length) in enumerate(zip(stamps_only, arc_lengths)):
+                    from .deformation import deform_stamp_along_spline
+
+                    # Get placement info from spline
+                    position = self.current_stroke.evaluate_at_arc_length(arc_length)
+                    tangent = self.current_stroke.get_tangent_at_arc_length(arc_length)
+                    normal = self.current_stroke.get_normal_at_arc_length(arc_length)
+
+                    # Apply deformation (less accurate as stamps may already be transformed)
+                    deformed = deform_stamp_along_spline(
+                        stamp,
+                        self.brush.center,
+                        stamp_frame,
+                        self.current_stroke,
+                        arc_length,
+                        position,
+                        tangent,
+                        normal
+                    )
+
+                    if deformation_strength < 1.0:
+                        for orig, deform in zip(stamp, deformed):
+                            # Blend position
+                            deform.position = (1.0 - deformation_strength) * orig.position + deformation_strength * deform.position
+                            # TODO: Blend rotation
+
+                    deformed_stamps.append(deformed)
+
+            # Add deformed Gaussians back to scene
+            total_gaussians = 0
+            for stamp in deformed_stamps:
+                self.scene.extend(stamp)
+                total_gaussians += len(stamp)
+
+            print(f"[Deformation] ✓ Deformation applied, {total_gaussians} Gaussians deformed")
+
+        # Phase 3-3: Apply inpainting
+        if enable_inpainting and len(self.placed_stamps) > 1:
+            print(f"[Inpainting] Applying inpainting to {len(self.placed_stamps)} stamps")
+
+            # Extract just the gaussians from placed_stamps (now tuples)
+            stamps_only = [gaussians for gaussians, _ in self.placed_stamps]
+
+            # Apply blending to overlapping regions
+            # Note: This modifies Gaussians in placed_stamps in-place
+            # If deformation was applied, the deformed stamps are already in the scene
+            # We need to work with the stamps that are currently in the scene
+
+            if enable_deformation:
+                # Deformation was applied, so we need to extract stamps from scene again
+                # This is a bit tricky - we'll blend the deformed stamps directly
+                # by reconstructing them from the scene
+
+                # For now, we'll skip inpainting after deformation
+                # because the stamps are already flattened into the scene
+                print(f"[Inpainting] ⚠ Inpainting after deformation not fully supported yet")
+                print(f"[Inpainting]    Applying simplified blending to scene Gaussians")
+
+                # Apply simple opacity reduction to all stroke Gaussians
+                stroke_gaussians = self.scene[self.current_stroke_start_index:]
+                for g in stroke_gaussians:
+                    g.opacity *= 0.9  # Slightly reduce opacity for better blending
+
+            else:
+                # No deformation - blend the placed_stamps directly
+                from backend.config import config
+                overlap_threshold = config.INPAINT_OVERLAP_THRESHOLD
+                blend_overlapping_stamps(stamps_only, overlap_threshold)
+
+            print(f"[Inpainting] ✓ Inpainting applied")
 
         # Reset
         self.current_stroke = None
         self.placed_stamps = []
+        self.stamp_placements = []
         self.last_stamp_arc_length = 0.0
 
     def get_stroke_gaussians(self) -> List[Gaussian2D]:
@@ -373,8 +520,8 @@ class StrokePainter:
             List of Gaussians in current stroke
         """
         result = []
-        for stamp in self.placed_stamps:
-            result.extend(stamp)
+        for gaussians, _ in self.placed_stamps:
+            result.extend(gaussians)
         return result
 
     def clear_scene(self):

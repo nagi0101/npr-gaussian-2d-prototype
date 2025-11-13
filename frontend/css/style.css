@@ -207,6 +207,22 @@ header h1 {
     cursor: pointer;
 }
 
+.control-group input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    margin-right: 8px;
+    cursor: pointer;
+    accent-color: #764ba2;
+}
+
+.help-text {
+    font-size: 12px;
+    color: #9ca3af;
+    margin-top: 5px;
+    margin-left: 26px;
+    line-height: 1.4;
+}
+
 /* Buttons */
 .btn {
     width: 100%;
@@ -284,6 +300,24 @@ header h1 {
     left: 0;
     color: #764ba2;
     font-weight: bold;
+}
+
+/* Debug Options */
+.debug-options {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #e5e7eb;
+    transition: all 0.3s ease;
+}
+
+.debug-options.hidden {
+    display: none;
+}
+
+.debug-section {
+    background: #f9fafb;
+    border-radius: 5px;
+    padding: 15px;
 }
 
 /* Responsive */

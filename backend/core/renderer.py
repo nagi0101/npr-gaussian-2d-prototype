@@ -6,8 +6,9 @@ GaussianRenderer2D: 2D Gaussian Splatting 렌더러
 """
 
 import numpy as np
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 from .gaussian import Gaussian2D
+from .debug_visualizer import DebugVisualizer
 import cv2
 
 
@@ -23,13 +24,15 @@ class GaussianRenderer2D:
         self,
         width: int = 1024,
         height: int = 768,
-        background_color: np.ndarray = np.array([1.0, 1.0, 1.0])
+        background_color: np.ndarray = np.array([1.0, 1.0, 1.0]),
+        debug_mode: bool = False
     ):
         """
         Args:
             width: 렌더링 이미지 너비 (픽셀)
             height: 렌더링 이미지 높이 (픽셀)
             background_color: 배경색 RGB [0, 1]
+            debug_mode: Enable debug visualization
         """
         self.width = width
         self.height = height
@@ -39,6 +42,12 @@ class GaussianRenderer2D:
         # 기본: (-1, 1) x (-1, 1) world space → (width, height) pixel space
         self.world_min = np.array([-1.0, -1.0])
         self.world_max = np.array([1.0, 1.0])
+
+        # Debug mode
+        self.debug_mode = debug_mode
+        self.debug_visualizer = None
+        if self.debug_mode:
+            self.debug_visualizer = DebugVisualizer(width=width, height=height)
 
     def set_world_bounds(self, world_min: np.ndarray, world_max: np.ndarray):
         """
@@ -91,12 +100,13 @@ class GaussianRenderer2D:
 
         return world_pos
 
-    def render(self, gaussians: List[Gaussian2D]) -> np.ndarray:
+    def render(self, gaussians: List[Gaussian2D], spline_data: Optional[Dict[str, Any]] = None) -> np.ndarray:
         """
         Gaussian 리스트를 2D 이미지로 렌더링
 
         Args:
             gaussians: List of Gaussian2D objects
+            spline_data: Optional spline visualization data for debug mode
 
         Returns:
             RGB 이미지 (height, width, 3) in range [0, 1]
@@ -116,6 +126,21 @@ class GaussianRenderer2D:
         # 각 Gaussian을 렌더링
         for i, gaussian in enumerate(sorted_gaussians):
             self._render_single_gaussian(gaussian, image, alpha_buffer, debug=(i < 3))
+
+        # Add debug overlay if enabled
+        if self.debug_mode and self.debug_visualizer:
+            # Convert float image to uint8 for OpenCV
+            image_uint8 = (np.clip(image, 0.0, 1.0) * 255).astype(np.uint8)
+
+            # Create debug overlay
+            debug_overlay = self.debug_visualizer.create_debug_overlay(
+                gaussians,
+                image=image_uint8,
+                spline_data=spline_data
+            )
+
+            # Convert back to float
+            image = debug_overlay.astype(np.float32) / 255.0
 
         return np.clip(image, 0.0, 1.0)
 
@@ -317,12 +342,34 @@ class GaussianRenderer2D:
         cv2.imwrite(filename, image_bgr)
         print(f"Image saved to {filename}")
 
+    def set_debug_mode(self, enabled: bool):
+        """
+        Enable or disable debug mode
+
+        Args:
+            enabled: True to enable debug mode
+        """
+        self.debug_mode = enabled
+        if self.debug_mode and self.debug_visualizer is None:
+            self.debug_visualizer = DebugVisualizer(width=self.width, height=self.height)
+
+    def set_debug_options(self, options: Dict[str, Any]):
+        """
+        Configure debug visualization options
+
+        Args:
+            options: Dictionary of debug options
+        """
+        if self.debug_visualizer:
+            self.debug_visualizer.set_debug_options(options)
+
 
 def create_renderer(
     width: int = 1024,
     height: int = 768,
     background_color: np.ndarray = np.array([1.0, 1.0, 1.0]),
-    prefer_gpu: bool = True
+    prefer_gpu: bool = True,
+    debug_mode: bool = False
 ):
     """
     Factory function to create renderer with automatic GPU/CPU selection
@@ -337,6 +384,7 @@ def create_renderer(
         height: Rendering height
         background_color: Background RGB [0, 1]
         prefer_gpu: If True, try GPU renderers first, fallback to CPU
+        debug_mode: Enable debug visualization
 
     Returns:
         Best available renderer based on GPU availability and library availability
@@ -378,7 +426,8 @@ def create_renderer(
     return GaussianRenderer2D(
         width=width,
         height=height,
-        background_color=background_color
+        background_color=background_color,
+        debug_mode=debug_mode
     )
 
 

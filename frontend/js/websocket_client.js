@@ -121,6 +121,18 @@ class GaussianPaintClient {
                     console.log('[Message] ✓ Scene cleared');
                     break;
 
+                case 'feature_flags_updated':
+                    console.log('[Message] ✓ Feature flags updated:', data.flags);
+                    break;
+
+                case 'debug_mode_updated':
+                    console.log('[Message] ✓ Debug mode updated:', data.enabled);
+                    break;
+
+                case 'debug_options_updated':
+                    console.log('[Message] ✓ Debug options updated:', data.options);
+                    break;
+
                 default:
                     console.warn('[Message] ⚠ Unknown message type:', msgType, data);
             }
@@ -214,6 +226,27 @@ class GaussianPaintClient {
             pattern: pattern,
             num_gaussians: numGaussians,
             color: color
+        });
+    }
+
+    setFeatureFlags(flags) {
+        this.send({
+            type: 'set_feature_flags',
+            ...flags
+        });
+    }
+
+    setDebugMode(enabled) {
+        this.send({
+            type: 'set_debug_mode',
+            enabled: enabled
+        });
+    }
+
+    setDebugOptions(options) {
+        this.send({
+            type: 'set_debug_options',
+            options: options
         });
     }
 

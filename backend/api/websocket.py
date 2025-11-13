@@ -39,17 +39,33 @@ class PaintingSession:
             width=config.RENDER_WIDTH,
             height=config.RENDER_HEIGHT,
             background_color=np.array(config.BACKGROUND_COLOR),
-            prefer_gpu=True  # Try GPU first, fallback to CPU
+            prefer_gpu=True,  # Try GPU first, fallback to CPU
+            debug_mode=config.DEBUG_MODE_ENABLED  # Enable debug mode from config
         )
         self.renderer.set_world_bounds(
             np.array(config.WORLD_MIN),
             np.array(config.WORLD_MAX)
         )
 
+        # Initialize debug options from config
+        if config.DEBUG_MODE_ENABLED:
+            self.renderer.set_debug_options({
+                'show_gaussian_origins': config.SHOW_GAUSSIAN_ORIGINS,
+                'show_basis_vectors': config.SHOW_BASIS_VECTORS,
+                'show_spline_frames': config.SHOW_SPLINE_FRAMES,
+                'show_deformation_vectors': config.SHOW_DEFORMATION_VECTORS,
+                'debug_opacity': config.DEBUG_OVERLAY_OPACITY,
+                'basis_vector_length': config.BASIS_VECTOR_LENGTH
+            })
+
         # Scene state
         self.scene_gaussians: list[Gaussian2D] = []
         self.current_painter: Optional[StrokePainter] = None
         self.brush: Optional[BrushStamp] = None
+
+        # Phase 3 feature flags
+        self.enable_deformation = config.ENABLE_DEFORMATION
+        self.enable_inpainting = config.ENABLE_INPAINTING
 
         # Initialize default brush
         print(f"[Session {session_id}] Creating default brush")
@@ -93,6 +109,12 @@ class PaintingSession:
                 await self._handle_set_brush_params(data)
             elif msg_type == 'create_brush':
                 await self._handle_create_brush(data)
+            elif msg_type == 'set_feature_flags':
+                await self._handle_set_feature_flags(data)
+            elif msg_type == 'set_debug_mode':
+                await self._handle_set_debug_mode(data)
+            elif msg_type == 'set_debug_options':
+                await self._handle_set_debug_options(data)
             elif msg_type == 'request_render':
                 await self.send_render()
             else:
@@ -147,7 +169,11 @@ class PaintingSession:
 
     async def _handle_stroke_end(self, data: dict):
         """Handle stroke end"""
-        self.current_painter.finish_stroke()
+        # Pass feature flags to finish_stroke
+        self.current_painter.finish_stroke(
+            enable_deformation=self.enable_deformation,
+            enable_inpainting=self.enable_inpainting
+        )
 
         # Send final render
         await self.send_render()
@@ -237,6 +263,63 @@ class PaintingSession:
             'pattern': pattern,
             'num_gaussians': len(self.brush.gaussians)
         })
+
+    async def _handle_set_feature_flags(self, data: dict):
+        """Set Phase 3 feature flags"""
+        if 'enable_deformation' in data:
+            self.enable_deformation = bool(data['enable_deformation'])
+            print(f"[Session {self.session_id}] ✓ Deformation: {'ON' if self.enable_deformation else 'OFF'}")
+
+        if 'deformation_strength' in data:
+            strength = float(data['deformation_strength'])
+            # Update global config (will affect all new strokes)
+            config.DEFORMATION_STRENGTH = strength
+            print(f"[Session {self.session_id}] ✓ Deformation strength: {strength:.2f}")
+
+        if 'enable_inpainting' in data:
+            self.enable_inpainting = bool(data['enable_inpainting'])
+            print(f"[Session {self.session_id}] ✓ Inpainting: {'ON' if self.enable_inpainting else 'OFF'}")
+
+        await self.send_message({
+            'type': 'feature_flags_updated',
+            'flags': {
+                'enable_deformation': self.enable_deformation,
+                'deformation_strength': config.DEFORMATION_STRENGTH,
+                'enable_inpainting': self.enable_inpainting
+            }
+        })
+
+    async def _handle_set_debug_mode(self, data: dict):
+        """Enable or disable debug mode"""
+        enabled = bool(data.get('enabled', False))
+        self.renderer.set_debug_mode(enabled)
+
+        print(f"[Session {self.session_id}] ✓ Debug mode: {'ON' if enabled else 'OFF'}")
+
+        await self.send_message({
+            'type': 'debug_mode_updated',
+            'enabled': enabled
+        })
+
+        # Re-render with debug mode
+        await self.send_render()
+
+    async def _handle_set_debug_options(self, data: dict):
+        """Update debug visualization options"""
+        options = data.get('options', {})
+
+        # Update renderer debug options
+        self.renderer.set_debug_options(options)
+
+        print(f"[Session {self.session_id}] ✓ Debug options updated")
+
+        await self.send_message({
+            'type': 'debug_options_updated',
+            'options': options
+        })
+
+        # Re-render with new debug options
+        await self.send_render()
 
     async def send_render(self):
         """Render current scene and send to client"""

@@ -19,10 +19,16 @@ class StrokeSpline:
     - Smooth interpolation of input points
     - Arc-length parameterization for uniform stamp spacing
     - Tangent and curvature computation for deformation
+    - Optional 2D constraint for canvas painting
     """
 
-    def __init__(self):
-        """Initialize empty spline"""
+    def __init__(self, force_2d: bool = True):
+        """
+        Initialize empty spline
+
+        Args:
+            force_2d: If True, constrain spline to XY plane (Z=0) with upward normal
+        """
         self.control_points: List[np.ndarray] = []  # 3D points
         self.normals: List[np.ndarray] = []  # Surface normals at each point
         self.spline: Optional[CubicSpline] = None
@@ -31,6 +37,8 @@ class StrokeSpline:
         self.spline_z: Optional[object] = None  # Parametric spline (t -> z)
         self.arc_lengths: Optional[np.ndarray] = None
         self.total_arc_length: float = 0.0
+        self.force_2d: bool = force_2d  # 2D painting mode
+        self.control_point_arc_lengths: Optional[np.ndarray] = None  # Arc lengths at control points
 
     def add_point(
         self,
@@ -42,20 +50,30 @@ class StrokeSpline:
         Add a point to the spline
 
         Args:
-            point: 3D position (x, y, z)
-            normal: Surface normal at this point
+            point: 3D position (x, y, z) - will be constrained to 2D if force_2d=True
+            normal: Surface normal at this point - will be forced to [0,0,1] if force_2d=True
             threshold: Minimum distance from previous point
 
         Returns:
             True if point was added, False if too close to previous
         """
+        # Apply 2D constraints if enabled
+        if self.force_2d:
+            point = np.array(point, dtype=np.float32)
+            point[2] = 0.0  # Force Z=0 (XY plane)
+            normal = np.array([0.0, 0.0, 1.0], dtype=np.float32)  # Force upward normal
+
         if len(self.control_points) == 0:
             self.control_points.append(np.array(point, dtype=np.float32))
             self.normals.append(np.array(normal, dtype=np.float32))
             return True
 
-        # Check distance threshold
-        distance = np.linalg.norm(point - self.control_points[-1])
+        # Check distance threshold (use 2D distance if force_2d)
+        if self.force_2d:
+            distance = np.linalg.norm(point[:2] - self.control_points[-1][:2])
+        else:
+            distance = np.linalg.norm(point - self.control_points[-1])
+
         if distance < threshold:
             return False
 
@@ -106,6 +124,7 @@ class StrokeSpline:
         저장:
         - arc_lengths: t 파라미터에 대응하는 arc length 배열
         - total_arc_length: 전체 spline의 arc length
+        - control_point_arc_lengths: Arc lengths at control points
         """
         if self.spline_x is None:
             return
@@ -127,6 +146,17 @@ class StrokeSpline:
 
         # Store t_samples for inverse lookup
         self.t_samples = t_samples
+
+        # Compute arc lengths at control points
+        num_control = len(self.control_points)
+        if num_control > 0:
+            # Find t values that correspond to control points
+            control_t_values = np.linspace(0, 1, num_control)
+            self.control_point_arc_lengths = np.zeros(num_control)
+
+            for i, t in enumerate(control_t_values):
+                # Interpolate arc length at this t value
+                self.control_point_arc_lengths[i] = np.interp(t, t_samples, self.arc_lengths)
 
     def evaluate_at_t(self, t: float) -> np.ndarray:
         """
@@ -232,13 +262,13 @@ class StrokeSpline:
 
     def get_normal_at_arc_length(self, arc_length: float) -> np.ndarray:
         """
-        Get surface normal at given arc length
+        Get surface normal at given arc length with SMOOTH INTERPOLATION
 
         Args:
             arc_length: Arc length from start
 
         Returns:
-            Normalized normal vector (interpolated from control points)
+            Normalized normal vector (smoothly interpolated from control points)
         """
         if len(self.normals) == 0:
             return np.array([0, 0, 1], dtype=np.float32)
@@ -246,18 +276,72 @@ class StrokeSpline:
         if self.total_arc_length == 0:
             return self.normals[0]
 
-        # Find nearest control point
-        # 간단한 버전: 가장 가까운 control point의 normal 사용
-        arc_length = np.clip(arc_length, 0.0, self.total_arc_length)
-        ratio = arc_length / self.total_arc_length
-        index = int(ratio * (len(self.normals) - 1))
-        index = np.clip(index, 0, len(self.normals) - 1)
+        if len(self.normals) == 1:
+            return self.normals[0]
 
-        return self.normals[index]
+        # Clip arc length to valid range
+        arc_length = np.clip(arc_length, 0.0, self.total_arc_length)
+
+        # Use actual arc lengths at control points (not uniform distribution)
+        if self.control_point_arc_lengths is None or len(self.control_point_arc_lengths) != len(self.normals):
+            # Fallback to uniform if not computed properly
+            num_points = len(self.normals)
+            control_arc_lengths = np.linspace(0, self.total_arc_length, num_points)
+        else:
+            control_arc_lengths = self.control_point_arc_lengths
+
+        # Find surrounding control points for interpolation
+        idx_after = np.searchsorted(control_arc_lengths, arc_length)
+
+        # Boundary cases
+        if idx_after == 0:
+            return self.normals[0]
+        if idx_after >= len(self.normals):
+            return self.normals[-1]
+
+        # Linear interpolation between two nearest normals
+        idx_before = idx_after - 1
+        arc_before = control_arc_lengths[idx_before]
+        arc_after = control_arc_lengths[idx_after]
+
+        # Interpolation factor
+        t = (arc_length - arc_before) / (arc_after - arc_before + 1e-10)
+        t = np.clip(t, 0.0, 1.0)
+
+        # Get normals
+        n1 = self.normals[idx_before]
+        n2 = self.normals[idx_after]
+
+        # Use spherical linear interpolation for better results
+        # This preserves the normal's magnitude better than linear interpolation
+        dot_product = np.clip(np.dot(n1, n2), -1.0, 1.0)
+
+        # If normals are nearly identical, use linear interpolation
+        if dot_product > 0.9995:
+            normal = (1.0 - t) * n1 + t * n2
+        else:
+            # Spherical linear interpolation
+            theta = np.arccos(dot_product)
+            sin_theta = np.sin(theta)
+            if sin_theta > 1e-6:
+                a = np.sin((1.0 - t) * theta) / sin_theta
+                b = np.sin(t * theta) / sin_theta
+                normal = a * n1 + b * n2
+            else:
+                # Fallback to linear if theta is too small
+                normal = (1.0 - t) * n1 + t * n2
+
+        # Normalize
+        norm = np.linalg.norm(normal)
+        if norm < 1e-8:
+            # Fallback to first normal if degenerate
+            return n1
+
+        return normal / norm
 
     def get_binormal_at_arc_length(self, arc_length: float) -> np.ndarray:
         """
-        Get binormal vector at given arc length
+        Get binormal vector at given arc length with improved stability
 
         binormal = normal × tangent
 
@@ -270,16 +354,42 @@ class StrokeSpline:
         tangent = self.get_tangent_at_arc_length(arc_length)
         normal = self.get_normal_at_arc_length(arc_length)
 
+        # Ensure tangent and normal are normalized
+        tangent = tangent / (np.linalg.norm(tangent) + 1e-10)
+        normal = normal / (np.linalg.norm(normal) + 1e-10)
+
+        # Compute binormal
         binormal = np.cross(normal, tangent)
         norm = np.linalg.norm(binormal)
 
-        if norm < 1e-8:
-            # Fallback: perpendicular to tangent in xy plane
-            binormal = np.array([-tangent[1], tangent[0], 0], dtype=np.float32)
-            norm = np.linalg.norm(binormal)
-            if norm < 1e-8:
-                binormal = np.array([0, 1, 0], dtype=np.float32)
-                return binormal
+        if norm < 1e-6:
+            # Degenerate case: normal and tangent are (nearly) parallel
+            # This typically happens in 2D painting where normal is always [0,0,1]
+            # and tangent is in XY plane
+
+            # Check if this is a 2D case (normal pointing up, tangent in XY plane)
+            if abs(normal[2]) > 0.9 and abs(tangent[2]) < 0.1:
+                # 2D case: rotate tangent 90° counterclockwise in XY plane
+                binormal = np.array([-tangent[1], tangent[0], 0.0], dtype=np.float32)
+                norm = np.linalg.norm(binormal)
+                if norm < 1e-8:
+                    # Tangent is zero or vertical - use default
+                    binormal = np.array([0, 1, 0], dtype=np.float32)
+                    return binormal
+            else:
+                # 3D case or unknown: find any perpendicular vector
+                # Use Gram-Schmidt to find perpendicular to both
+                if abs(normal[0]) < 0.9:
+                    temp = np.array([1, 0, 0], dtype=np.float32)
+                else:
+                    temp = np.array([0, 1, 0], dtype=np.float32)
+
+                binormal = temp - np.dot(temp, normal) * normal
+                binormal = binormal - np.dot(binormal, tangent) * tangent
+                norm = np.linalg.norm(binormal)
+                if norm < 1e-8:
+                    binormal = np.array([0, 1, 0], dtype=np.float32)
+                    return binormal
 
         return binormal / norm
 

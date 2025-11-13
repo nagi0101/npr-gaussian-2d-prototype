@@ -45,7 +45,10 @@ def deform_stamp_along_spline(
     stamp_center: np.ndarray,
     stamp_frame: Tuple[np.ndarray, np.ndarray, np.ndarray],
     spline: StrokeSpline,
-    arc_length_param: float
+    arc_length_param: float,
+    placement_position: np.ndarray = None,
+    placement_tangent: np.ndarray = None,
+    placement_normal: np.ndarray = None
 ) -> List[Gaussian2D]:
     """
     Apply non-rigid deformation to stamp along spline
@@ -54,11 +57,14 @@ def deform_stamp_along_spline(
     "Orientation Adjustment" 알고리즘 구현
 
     Args:
-        stamp_gaussians: List of Gaussians in stamp
-        stamp_center: Stamp center position
-        stamp_frame: (tangent, normal, binormal) of stamp
+        stamp_gaussians: List of Gaussians in stamp (brush-local coordinates)
+        stamp_center: Stamp center position (in brush frame)
+        stamp_frame: (tangent, normal, binormal) of stamp (brush frame)
         spline: Stroke spline
         arc_length_param: Arc length where stamp is placed
+        placement_position: Position on spline where stamp is placed
+        placement_tangent: Tangent at placement position
+        placement_normal: Normal at placement position
 
     Returns:
         List of deformed Gaussians
@@ -68,20 +74,33 @@ def deform_stamp_along_spline(
 
     t_B, n_B, b_B = stamp_frame
 
+    # If placement info not provided, get from spline
+    if placement_position is None:
+        placement_position = spline.evaluate_at_arc_length(arc_length_param)
+    if placement_tangent is None:
+        placement_tangent = spline.get_tangent_at_arc_length(arc_length_param)
+    if placement_normal is None:
+        placement_normal = spline.get_normal_at_arc_length(arc_length_param)
+
     deformed = []
 
     for g in stamp_gaussians:
-        # 1. Compute local coordinates in stamp frame
+        # 1. Get local coordinates in brush frame (g.position is already in brush-local)
         local_pos = g.position - stamp_center
 
-        # Project onto stamp axes
-        x = np.dot(local_pos, t_B)  # Along tangent
-        y = np.dot(local_pos, b_B)  # Along binormal
-        z = np.dot(local_pos, n_B)  # Along normal
+        # Project onto brush axes
+        x = np.dot(local_pos, t_B)  # Along tangent (longitudinal offset)
+        y = np.dot(local_pos, b_B)  # Along binormal (lateral offset)
+        z = np.dot(local_pos, n_B)  # Along normal (height offset)
 
-        # 2. Compute spline frame at deformed location
-        # Move along spline by x (tangential offset)
-        a_new = arc_length_param + x
+        # 2. Convert tangential offset to arc length offset
+        # This is an approximation - assumes locally linear spline
+        # For more accuracy, could use numerical search
+        arc_length_offset = x  # Simplified: assume unit speed parameterization
+
+        # 3. Compute spline frame at deformed location
+        # Move along spline by the tangential offset
+        a_new = arc_length_param + arc_length_offset
 
         # Clamp to valid range
         a_new = np.clip(a_new, 0.0, spline.total_arc_length)
@@ -90,12 +109,12 @@ def deform_stamp_along_spline(
         pos_on_spline = spline.evaluate_at_arc_length(a_new)
         t_s, n_s, b_s = spline.get_frame_at_arc_length(a_new)
 
-        # 3. Compute deformed position
+        # 4. Compute deformed position
         # Position on spline + offsets along binormal and normal
         new_pos = pos_on_spline + y * b_s + z * n_s
 
-        # 4. Compute rotation for this Gaussian
-        # Rotate from stamp frame to spline frame at this location
+        # 5. Compute rotation for this Gaussian
+        # Rotate from brush frame to spline frame at this location
         R = compute_rotation_matrix_from_frames(
             from_frame=(t_B, n_B, b_B),
             to_frame=(t_s, n_s, b_s)
@@ -104,10 +123,14 @@ def deform_stamp_along_spline(
         # Apply rotation to Gaussian's quaternion
         new_rotation = apply_rotation_matrix_to_quaternion(R, g.rotation)
 
-        # 5. Create deformed Gaussian
+        # 6. Optional: Apply curvature-based scaling
+        # Could adjust scale based on local curvature here
+        new_scale = g.scale.copy()
+
+        # 7. Create deformed Gaussian
         g_new = Gaussian2D(
             position=new_pos,
-            scale=g.scale.copy(),  # Keep scale (rigid)
+            scale=new_scale,
             rotation=new_rotation,
             opacity=g.opacity,
             color=g.color.copy(),

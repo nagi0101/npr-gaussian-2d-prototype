@@ -68,6 +68,78 @@
                     <button id="applyBrushBtn" class="btn">Apply Settings</button>
                 </section>
 
+                <!-- Phase 3 Features -->
+                <section class="control-section">
+                    <h3>Advanced Features</h3>
+
+                    <div class="control-group">
+                        <label>
+                            <input type="checkbox" id="enableDeformation" checked>
+                            Enable Deformation
+                        </label>
+                        <p class="help-text">Non-rigid brush deformation along spline curvature</p>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="deformationStrength">Deformation Strength: <span id="deformationStrengthValue">0.5</span></label>
+                        <input type="range" id="deformationStrength" min="0.0" max="1.0" step="0.1" value="0.5">
+                        <p class="help-text">0.0 = no deformation, 1.0 = full deformation</p>
+                    </div>
+
+                    <div class="control-group">
+                        <label>
+                            <input type="checkbox" id="enableInpainting">
+                            Enable Inpainting
+                        </label>
+                        <p class="help-text">Blend overlapping stamp regions (experimental)</p>
+                    </div>
+
+                    <button id="applyFeaturesBtn" class="btn">Apply Features</button>
+                </section>
+
+                <!-- Debug Visualization -->
+                <section class="control-section">
+                    <h3>Debug Visualization</h3>
+
+                    <div class="control-group">
+                        <label>
+                            <input type="checkbox" id="enableDebugMode">
+                            Enable Debug Mode
+                        </label>
+                        <p class="help-text">Show Gaussian frames and basis vectors</p>
+                    </div>
+
+                    <div id="debugOptions" class="debug-options hidden">
+                        <div class="control-group">
+                            <label>
+                                <input type="checkbox" id="showGaussianOrigins" checked>
+                                Show Gaussian Origins
+                            </label>
+                        </div>
+
+                        <div class="control-group">
+                            <label>
+                                <input type="checkbox" id="showBasisVectors" checked>
+                                Show Basis Vectors (X,Y,Z)
+                            </label>
+                        </div>
+
+                        <div class="control-group">
+                            <label>
+                                <input type="checkbox" id="showSplineFrames">
+                                Show Spline Frames
+                            </label>
+                        </div>
+
+                        <div class="control-group">
+                            <label for="debugOpacity">Debug Overlay Opacity: <span id="debugOpacityValue">0.8</span></label>
+                            <input type="range" id="debugOpacity" min="0.1" max="1.0" step="0.1" value="0.8">
+                        </div>
+
+                        <button id="applyDebugBtn" class="btn">Apply Debug Settings</button>
+                    </div>
+                </section>
+
                 <!-- Actions -->
                 <section class="control-section">
                     <h3>Actions</h3>
