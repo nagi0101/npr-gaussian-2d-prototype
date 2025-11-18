@@ -53,3 +53,7 @@ gsplat
 plyfile==1.0.3
 tqdm==4.66.1
 packaging>=21.0  # Required by gsplat
+
+# Configuration and visualization
+omegaconf>=2.3.0  # For Hydra-style configuration
+matplotlib>=3.7.0  # For debug visualization
