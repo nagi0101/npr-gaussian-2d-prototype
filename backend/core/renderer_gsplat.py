@@ -193,42 +193,65 @@ class GaussianRenderer2D_GSplat:
         return world_pos
 
     def render(
-        self, gaussians: List[Gaussian2D], spline_data: Optional[Dict[str, Any]] = None
+        self, gaussians, spline_data: Optional[Dict[str, Any]] = None
     ) -> np.ndarray:
         """
         Render Gaussians to 2D image (gsplat-accelerated)
 
         Args:
-            gaussians: List of Gaussian2D objects
+            gaussians: List[Gaussian2D] or SceneData object
             spline_data: Optional spline visualization data for debug mode
 
         Returns:
             RGB image (height, width, 3) in range [0, 1]
         """
-        if len(gaussians) == 0:
-            # Return white background
-            return self.background_color.cpu().numpy().reshape(1, 1, 3) * np.ones(
-                (self.height, self.width, 3), dtype=np.float32
-            )
+        # Check if input is SceneData (fast path) or List[Gaussian2D] (legacy)
+        from .scene_data import SceneData
+        use_scene_data = isinstance(gaussians, SceneData)
 
-        # Depth sort (painter's algorithm)
-        sorted_gaussians = sorted(gaussians, key=lambda g: -g.position[2])
-        n = len(sorted_gaussians)
+        if use_scene_data:
+            # Fast path: Use SceneData arrays directly
+            n = len(gaussians)
+            if n == 0:
+                return self.background_color.cpu().numpy().reshape(1, 1, 3) * np.ones(
+                    (self.height, self.width, 3), dtype=np.float32
+                )
 
-        # Batch: Collect all Gaussian data on CPU
-        positions = np.zeros((n, 3), dtype=np.float32)
-        scales = np.zeros((n, 3), dtype=np.float32)
-        rotations = np.zeros((n, 4), dtype=np.float32)
-        opacities = np.zeros(n, dtype=np.float32)
-        colors = np.zeros((n, 3), dtype=np.float32)
+            # Depth sort by z-coordinate (descending order for painter's algorithm)
+            sort_indices = np.argsort(-gaussians.positions[:, 2])
 
-        for i, g in enumerate(sorted_gaussians):
-            positions[i] = g.position
-            scales[i] = g.scale
-            # scales[i][2] = 0.1  # Override z-scale: gsplat requires non-zero depth
-            rotations[i] = g.rotation
-            opacities[i] = g.opacity
-            colors[i] = g.color
+            # Extract sorted arrays (no object creation needed!)
+            # Ensure float32 dtype for GPU compatibility
+            positions = gaussians.positions[sort_indices].astype(np.float32, copy=False)
+            scales = gaussians.scales[sort_indices].astype(np.float32, copy=False)
+            rotations = gaussians.rotations[sort_indices].astype(np.float32, copy=False)
+            opacities = gaussians.opacities[sort_indices].astype(np.float32, copy=False)
+            colors = gaussians.colors[sort_indices].astype(np.float32, copy=False)
+        else:
+            # Legacy path: List[Gaussian2D]
+            if len(gaussians) == 0:
+                return self.background_color.cpu().numpy().reshape(1, 1, 3) * np.ones(
+                    (self.height, self.width, 3), dtype=np.float32
+                )
+
+            # Depth sort (painter's algorithm)
+            sorted_gaussians = sorted(gaussians, key=lambda g: -g.position[2])
+            n = len(sorted_gaussians)
+
+            # Batch: Collect all Gaussian data on CPU
+            positions = np.zeros((n, 3), dtype=np.float32)
+            scales = np.zeros((n, 3), dtype=np.float32)
+            rotations = np.zeros((n, 4), dtype=np.float32)
+            opacities = np.zeros(n, dtype=np.float32)
+            colors = np.zeros((n, 3), dtype=np.float32)
+
+            for i, g in enumerate(sorted_gaussians):
+                positions[i] = g.position
+                scales[i] = g.scale
+                # scales[i][2] = 0.1  # Override z-scale: gsplat requires non-zero depth
+                rotations[i] = g.rotation
+                opacities[i] = g.opacity
+                colors[i] = g.color
 
         # Transfer to GPU in single batch
         means = torch.from_numpy(positions).to(self.device, non_blocking=True)
@@ -358,12 +381,12 @@ class GaussianRenderer2D_GSplat:
             self.debug_visualizer.set_debug_options(options)
             print(f"[GSplat Renderer] Debug options updated")
 
-    def render_with_depth(self, gaussians: List[Gaussian2D]) -> tuple:
+    def render_with_depth(self, gaussians) -> tuple:
         """
         Render RGB + depth map
 
         Args:
-            gaussians: List of Gaussian2D
+            gaussians: List[Gaussian2D] or SceneData
 
         Returns:
             (rgb_image, depth_map)
@@ -375,12 +398,24 @@ class GaussianRenderer2D_GSplat:
         # Depth map (simplified - could be extracted from gsplat meta)
         depth_map = np.zeros((self.height, self.width), dtype=np.float32)
 
-        for gaussian in gaussians:
-            center_pixel = self.world_to_pixel(gaussian.position[:2])
-            cx, cy = int(center_pixel[0]), int(center_pixel[1])
+        # Check if input is SceneData
+        from .scene_data import SceneData
+        if isinstance(gaussians, SceneData):
+            # Fast path: Use arrays
+            for i in range(len(gaussians)):
+                center_pixel = self.world_to_pixel(gaussians.positions[i, :2])
+                cx, cy = int(center_pixel[0]), int(center_pixel[1])
 
-            if 0 <= cx < self.width and 0 <= cy < self.height:
-                depth_map[cy, cx] = max(depth_map[cy, cx], gaussian.position[2])
+                if 0 <= cx < self.width and 0 <= cy < self.height:
+                    depth_map[cy, cx] = max(depth_map[cy, cx], gaussians.positions[i, 2])
+        else:
+            # Legacy path: List[Gaussian2D]
+            for gaussian in gaussians:
+                center_pixel = self.world_to_pixel(gaussian.position[:2])
+                cx, cy = int(center_pixel[0]), int(center_pixel[1])
+
+                if 0 <= cx < self.width and 0 <= cy < self.height:
+                    depth_map[cy, cx] = max(depth_map[cy, cx], gaussian.position[2])
 
         return rgb, depth_map
 

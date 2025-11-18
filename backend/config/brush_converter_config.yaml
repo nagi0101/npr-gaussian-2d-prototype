@@ -3,80 +3,86 @@
 
 # Debug and Visualization
 debug:
-  enabled: true  # Enable debug mode
-  visualize: true  # Generate visualization images
-  output_dir: "debug_output"  # Directory for debug outputs
-  save_intermediate: true  # Save intermediate results
-  verbose_logging: true  # Detailed console logs
+    enabled: true # Enable debug mode
+    visualize: true # Generate visualization images
+    output_dir: "debug_output" # Directory for debug outputs
+    save_intermediate: true # Save intermediate results
+    verbose_logging: true # Detailed console logs
 
 # Gaussian Parameters
 gaussian:
-  target_count: 800  # Target number of Gaussians
-  scale_multiplier: 0.6  # Scale factor for Gaussian size (reduced from 2.0)
-  z_scale: 0.3  # Depth scale factor
+    target_count: 800 # Target number of Gaussians
+    scale_multiplier: 0.6 # Scale factor for Gaussian size (reduced from 2.0)
+    z_scale: 0.3 # Depth scale factor
 
-  # Thickness modulation
-  thickness:
-    enabled: true
-    multiplier: 1.2  # Thickness scale multiplier
-    min_scale: 0.8  # Minimum thickness scale
-    max_scale: 1.2  # Maximum thickness scale
+    # Thickness modulation
+    thickness:
+        enabled: true
+        multiplier: 1.2 # Thickness scale multiplier
+        min_scale: 0.8 # Minimum thickness scale
+        max_scale: 1.2 # Maximum thickness scale
 
-  # Opacity settings
-  opacity:
-    base: 0.8
-    thickness_multiplier: 2.0
+    # Directional elongation (for brush stroke/painting feel)
+    elongation:
+        enabled: true # Enable directional elongation
+        ratio: 3.0 # Long axis / short axis ratio (e.g., 3.0 = 3:1 ellipse)
+        strength: 1.0 # Blend factor (0.0 = circular, 1.0 = full elongation)
+
+    # Opacity settings
+    opacity:
+        base: 0.8
+        thickness_multiplier: 2.0
 
 # Contrast Enhancement
 contrast:
-  enabled: true
-  min_contrast: 0.3  # Minimum contrast range (increased from 0.2)
-  percentile_low: 5  # Lower percentile for contrast stretching
-  percentile_high: 95  # Upper percentile for contrast stretching
+    enabled: true
+    min_contrast: 0.3 # Minimum contrast range (increased from 0.2)
+    percentile_low: 5 # Lower percentile for contrast stretching
+    percentile_high: 95 # Upper percentile for contrast stretching
 
 # Importance Sampling
 importance_sampling:
-  enabled: true
-  weights:
-    gradient: 0.2  # Edge and texture importance
-    thickness: 0.4  # Coverage importance
-    skeleton: 0.4  # Structural importance
+    enabled: true
+    weights:
+        gradient: 0.2 # Edge and texture importance
+        thickness: 0.4 # Coverage importance
+        skeleton: 0.4 # Structural importance
 
 # Depth Estimation
 depth:
-  use_midas: true  # Use MiDaS for depth estimation
-  default_profile: "convex"  # flat, convex, concave, wavy
-  default_scale: 0.2  # Depth scale factor
+    use_midas: true # Use MiDaS for depth estimation
+    default_profile: "convex" # flat, convex, concave, wavy
+    default_scale: 0.2 # Depth scale factor
 
 # Point Cloud Generation
 point_cloud:
-  alpha_threshold: 0.3  # Minimum alpha to include point (increased to filter gray pixels)
-  preserve_aspect_ratio: true
-  target_world_size: 0.5  # Maximum extent
+    alpha_threshold: 0.3 # Minimum alpha to include point (increased to filter gray pixels)
+    preserve_aspect_ratio: true
+    target_world_size: 0.5 # Maximum extent
 
 # Rendering
 rendering:
-  eps2d: 0.01  # 2D covariance regularization (reduced from 0.05 for maximum sharpness)
+    eps2d: 0.01 # 2D covariance regularization (reduced from 0.05 for maximum sharpness)
 
 # Refinement
 refinement:
-  enabled: false  # Disable refinement for now (causing issues)
-  position_jitter: 0.005
-  rotation_jitter_degrees: 5
+    enabled: false # Disable refinement for now (causing issues)
+    position_jitter: 0.005
+    rotation_jitter_degrees: 5
 
 # Optimization
 optimization:
-  enabled: false  # Appearance optimization
-  max_iterations: 0
-  learning_rate: 0.01
-  l1_weight: 0.7
-  ssim_weight: 0.2
-  reg_weight: 0.1
+    enabled: false # Appearance optimization
+    max_iterations: 0
+    learning_rate: 0.01
+    l1_weight: 0.7
+    ssim_weight: 0.2
+    reg_weight: 0.1
 
 # Visualization Settings
 visualization:
-  figure_size: [20, 12]  # Figure size in inches
-  dpi: 100  # DPI for saved images
-  colormap: "viridis"  # Colormap for heatmaps
-  show_grid: true  # Show grid on plots
-  font_size: 10  # Base font size
+    figure_size: [20, 12] # Figure size in inches
+    dpi: 100 # DPI for saved images
+    colormap: "viridis" # Colormap for heatmaps
+    show_grid: true # Show grid on plots
+    font_size: 10 # Base font size

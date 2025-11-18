@@ -810,17 +810,11 @@ class BrushConverter:
             else:
                 thickness_scale = 1.0
 
-            scale = np.array(
-                [
-                    avg_distance * scale_mult * thickness_scale,  # X scale
-                    avg_distance * scale_mult * thickness_scale,  # Y scale
-                    avg_distance * z_scale,  # Z scale (thin in depth)
-                ]
-            )
-
             # Rotation: Try skeleton tangent first, fallback to flow field
+            # (rotation is calculated BEFORE scale to determine elongation direction)
             h, w = features["thickness"].shape
             skeleton_tangent = self._find_skeleton_tangent(pos, features, (h, w))
+            has_direction = False  # Track if we have directional information
 
             if skeleton_tangent is not None:
                 # Use skeleton tangent for more accurate stroke direction
@@ -831,6 +825,7 @@ class BrushConverter:
                 rotation = quaternion_from_axis_angle(
                     axis=np.array([0, 0, 1]), angle=angle
                 )
+                has_direction = True
             elif (
                 0 <= x_img < features["flow_x"].shape[1]
                 and 0 <= y_img < features["flow_y"].shape[0]
@@ -846,9 +841,39 @@ class BrushConverter:
                 rotation = quaternion_from_axis_angle(
                     axis=np.array([0, 0, 1]), angle=angle
                 )
+                has_direction = True
             else:
                 # Default quaternion (no rotation)
                 rotation = np.array([0, 0, 0, 1])
+                has_direction = False
+
+            # Scale calculation with optional directional elongation
+            # Apply elongation when we have directional information (skeleton or flow)
+            if (
+                has_direction
+                and hasattr(self.config.gaussian, 'elongation')
+                and self.config.gaussian.elongation.enabled
+            ):
+                # Get elongation parameters from config
+                elongation_ratio = self.config.gaussian.elongation.ratio
+                elongation_strength = self.config.gaussian.elongation.strength
+
+                # Base scale (short axis)
+                base_scale = avg_distance * scale_mult * thickness_scale
+
+                # Long axis (along stroke direction)
+                long_axis = base_scale * elongation_ratio
+
+                # Blend based on strength (0.0 = circular, 1.0 = full elongation)
+                long_axis = base_scale + (long_axis - base_scale) * elongation_strength
+
+                # Create anisotropic scale: [long_axis, short_axis, depth]
+                # X = along rotation direction, Y = perpendicular
+                scale = np.array([long_axis, base_scale, avg_distance * z_scale])
+            else:
+                # No direction or elongation disabled: use isotropic (circular) scale
+                base_scale = avg_distance * scale_mult * thickness_scale
+                scale = np.array([base_scale, base_scale, avg_distance * z_scale])
 
             # Now create Gaussian with all required parameters
             g = Gaussian2D(
@@ -894,13 +919,14 @@ class BrushConverter:
             jitter_pos = np.random.normal(0, 0.005, 3)  # Small position noise
             g.position = g.position + jitter_pos
 
-            # Small rotation jitter
-            jitter_angle = np.random.normal(0, np.pi / 36)  # ±5 degrees
+            # Small rotation jitter (reduced to preserve directional elongation)
+            jitter_angle = np.random.normal(0, np.pi / 90)  # ±2 degrees (reduced from ±5)
             jitter_quat = quaternion_from_axis_angle(
                 axis=np.array([0, 0, 1]), angle=jitter_angle
             )
-            # Combine rotations (simplified - just add small Z rotation)
-            g.rotation = jitter_quat
+            # Combine rotations: multiply quaternions to preserve original direction
+            from backend.core.quaternion_utils import quaternion_multiply
+            g.rotation = quaternion_multiply(g.rotation, jitter_quat)
 
             # 3. Adjust opacity based on gradient magnitude
             if (
