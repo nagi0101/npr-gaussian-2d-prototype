@@ -138,11 +138,11 @@ def _cache_spline_on_gpu(spline: StrokeSpline, device: torch.device, n_samples: 
         binormals.append(b)
 
     # Convert to GPU tensors
-    arc_samples_gpu = torch.from_numpy(arc_samples).to(device)
-    pos_samples_gpu = torch.from_numpy(np.array(positions, dtype=np.float32)).to(device)
-    tangent_samples_gpu = torch.from_numpy(np.array(tangents, dtype=np.float32)).to(device)
-    normal_samples_gpu = torch.from_numpy(np.array(normals, dtype=np.float32)).to(device)
-    binormal_samples_gpu = torch.from_numpy(np.array(binormals, dtype=np.float32)).to(device)
+    arc_samples_gpu = torch.from_numpy(arc_samples).to(device, dtype=torch.float32)
+    pos_samples_gpu = torch.from_numpy(np.array(positions, dtype=np.float32)).to(device, dtype=torch.float32)
+    tangent_samples_gpu = torch.from_numpy(np.array(tangents, dtype=np.float32)).to(device, dtype=torch.float32)
+    normal_samples_gpu = torch.from_numpy(np.array(normals, dtype=np.float32)).to(device, dtype=torch.float32)
+    binormal_samples_gpu = torch.from_numpy(np.array(binormals, dtype=np.float32)).to(device, dtype=torch.float32)
 
     return {
         'arc_samples': arc_samples_gpu,
@@ -236,7 +236,7 @@ def batch_evaluate_spline_positions(
             spline.evaluate_at_arc_length(float(a))
             for a in arc_cpu
         ], dtype=np.float32)
-        return torch.from_numpy(positions).to(device)
+        return torch.from_numpy(positions).to(device, dtype=torch.float32)
 
 
 def batch_evaluate_spline_frames(
@@ -280,9 +280,9 @@ def batch_evaluate_spline_frames(
             normals.append(n)
             binormals.append(b)
 
-        tangents = torch.from_numpy(np.array(tangents, dtype=np.float32)).to(device)
-        normals = torch.from_numpy(np.array(normals, dtype=np.float32)).to(device)
-        binormals = torch.from_numpy(np.array(binormals, dtype=np.float32)).to(device)
+        tangents = torch.from_numpy(np.array(tangents, dtype=np.float32)).to(device, dtype=torch.float32)
+        normals = torch.from_numpy(np.array(normals, dtype=np.float32)).to(device, dtype=torch.float32)
+        binormals = torch.from_numpy(np.array(binormals, dtype=np.float32)).to(device, dtype=torch.float32)
 
         return tangents, normals, binormals
 
@@ -343,15 +343,15 @@ def deform_stamp_along_spline_gpu(
         return deformed
 
     # 2. Transfer to GPU (single batch)
-    pos_gpu = torch.from_numpy(positions).to(dev)
-    rot_gpu = torch.from_numpy(rotations).to(dev)
+    pos_gpu = torch.from_numpy(positions).to(dev, dtype=torch.float32)
+    rot_gpu = torch.from_numpy(rotations).to(dev, dtype=torch.float32)
 
     # 3. Brush frame on GPU
     t_B, n_B, b_B = stamp_frame
-    stamp_center_gpu = torch.from_numpy(stamp_center).to(dev)
-    t_B_gpu = torch.from_numpy(t_B).to(dev)
-    n_B_gpu = torch.from_numpy(n_B).to(dev)
-    b_B_gpu = torch.from_numpy(b_B).to(dev)
+    stamp_center_gpu = torch.from_numpy(stamp_center).to(dev, dtype=torch.float32)
+    t_B_gpu = torch.from_numpy(t_B).to(dev, dtype=torch.float32)
+    n_B_gpu = torch.from_numpy(n_B).to(dev, dtype=torch.float32)
+    b_B_gpu = torch.from_numpy(b_B).to(dev, dtype=torch.float32)
 
     # 4. Batch compute local coordinates (vectorized)
     local_pos = pos_gpu - stamp_center_gpu  # [N, 3]
@@ -468,16 +468,16 @@ def deform_all_stamps_batch_gpu(
 
     # Transfer to GPU
     dev = torch.device(device)
-    pos_gpu = torch.from_numpy(positions).to(dev)
-    rot_gpu = torch.from_numpy(rotations).to(dev)
-    arc_lengths_gpu = torch.from_numpy(arc_lengths_array).to(dev)
+    pos_gpu = torch.from_numpy(positions).to(dev, dtype=torch.float32)
+    rot_gpu = torch.from_numpy(rotations).to(dev, dtype=torch.float32)
+    arc_lengths_gpu = torch.from_numpy(arc_lengths_array).to(dev, dtype=torch.float32)
 
     # Brush frame on GPU
     t_B, n_B, b_B = stamp_frame
-    stamp_center_gpu = torch.from_numpy(stamp_center).to(dev)
-    t_B_gpu = torch.from_numpy(t_B).to(dev)
-    n_B_gpu = torch.from_numpy(n_B).to(dev)
-    b_B_gpu = torch.from_numpy(b_B).to(dev)
+    stamp_center_gpu = torch.from_numpy(stamp_center).to(dev, dtype=torch.float32)
+    t_B_gpu = torch.from_numpy(t_B).to(dev, dtype=torch.float32)
+    n_B_gpu = torch.from_numpy(n_B).to(dev, dtype=torch.float32)
+    b_B_gpu = torch.from_numpy(b_B).to(dev, dtype=torch.float32)
 
     # Batch deformation (same as single stamp, but with variable arc_lengths)
     local_pos = pos_gpu - stamp_center_gpu
