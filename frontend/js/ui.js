@@ -38,8 +38,6 @@ class UIController {
 
         // Phase 3 Features
         this.enableDeformation = document.getElementById('enableDeformation');
-        this.deformationStrength = document.getElementById('deformationStrength');
-        this.deformationStrengthValue = document.getElementById('deformationStrengthValue');
         this.enableInpainting = document.getElementById('enableInpainting');
         this.applyFeaturesBtn = document.getElementById('applyFeaturesBtn');
 
@@ -81,11 +79,6 @@ class UIController {
         // Brush opacity slider
         this.brushOpacity.addEventListener('input', (e) => {
             this.brushOpacityValue.textContent = e.target.value;
-        });
-
-        // Deformation strength slider
-        this.deformationStrength.addEventListener('input', (e) => {
-            this.deformationStrengthValue.textContent = e.target.value;
         });
 
         // Create brush button
@@ -175,7 +168,6 @@ class UIController {
     handleApplyFeatures() {
         const flags = {
             enable_deformation: this.enableDeformation.checked,
-            deformation_strength: parseFloat(this.deformationStrength.value),
             enable_inpainting: this.enableInpainting.checked
         };
 

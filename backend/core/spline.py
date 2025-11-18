@@ -38,13 +38,12 @@ class StrokeSpline:
         self.arc_lengths: Optional[np.ndarray] = None
         self.total_arc_length: float = 0.0
         self.force_2d: bool = force_2d  # 2D painting mode
-        self.control_point_arc_lengths: Optional[np.ndarray] = None  # Arc lengths at control points
+        self.control_point_arc_lengths: Optional[np.ndarray] = (
+            None  # Arc lengths at control points
+        )
 
     def add_point(
-        self,
-        point: np.ndarray,
-        normal: np.ndarray,
-        threshold: float = 0.01
+        self, point: np.ndarray, normal: np.ndarray, threshold: float = 0.01
     ) -> bool:
         """
         Add a point to the spline
@@ -102,15 +101,15 @@ class StrokeSpline:
         elif len(points) == 3:
             # Quadratic for 3 points
             t = np.linspace(0, 1, len(points))
-            self.spline_x = CubicSpline(t, points[:, 0], bc_type='natural')
-            self.spline_y = CubicSpline(t, points[:, 1], bc_type='natural')
-            self.spline_z = CubicSpline(t, points[:, 2], bc_type='natural')
+            self.spline_x = CubicSpline(t, points[:, 0], bc_type="natural")
+            self.spline_y = CubicSpline(t, points[:, 1], bc_type="natural")
+            self.spline_z = CubicSpline(t, points[:, 2], bc_type="natural")
         else:
             # Cubic spline for 4+ points
             t = np.linspace(0, 1, len(points))
-            self.spline_x = CubicSpline(t, points[:, 0], bc_type='natural')
-            self.spline_y = CubicSpline(t, points[:, 1], bc_type='natural')
-            self.spline_z = CubicSpline(t, points[:, 2], bc_type='natural')
+            self.spline_x = CubicSpline(t, points[:, 0], bc_type="natural")
+            self.spline_y = CubicSpline(t, points[:, 1], bc_type="natural")
+            self.spline_z = CubicSpline(t, points[:, 2], bc_type="natural")
 
         # Compute arc-length parameterization
         self._compute_arc_length()
@@ -131,10 +130,9 @@ class StrokeSpline:
 
         # Sample points along spline
         t_samples = np.linspace(0, 1, 100)
-        positions = np.array([
-            [self.spline_x(t), self.spline_y(t), self.spline_z(t)]
-            for t in t_samples
-        ])
+        positions = np.array(
+            [[self.spline_x(t), self.spline_y(t), self.spline_z(t)] for t in t_samples]
+        )
 
         # Compute segment lengths
         segment_vectors = np.diff(positions, axis=0)
@@ -156,7 +154,13 @@ class StrokeSpline:
 
             for i, t in enumerate(control_t_values):
                 # Interpolate arc length at this t value
-                self.control_point_arc_lengths[i] = np.interp(t, t_samples, self.arc_lengths)
+                self.control_point_arc_lengths[i] = np.interp(
+                    t, t_samples, self.arc_lengths
+                )
+
+        # Invalidate GPU cache when spline geometry changes
+        # This ensures deformation uses fresh spline data after refit
+        self._gpu_cache = None
 
     def evaluate_at_t(self, t: float) -> np.ndarray:
         """
@@ -175,11 +179,9 @@ class StrokeSpline:
 
         t = np.clip(t, 0.0, 1.0)
 
-        return np.array([
-            self.spline_x(t),
-            self.spline_y(t),
-            self.spline_z(t)
-        ], dtype=np.float32)
+        return np.array(
+            [self.spline_x(t), self.spline_y(t), self.spline_z(t)], dtype=np.float32
+        )
 
     def evaluate_at_arc_length(self, arc_length: float) -> np.ndarray:
         """
@@ -283,7 +285,9 @@ class StrokeSpline:
         arc_length = np.clip(arc_length, 0.0, self.total_arc_length)
 
         # Use actual arc lengths at control points (not uniform distribution)
-        if self.control_point_arc_lengths is None or len(self.control_point_arc_lengths) != len(self.normals):
+        if self.control_point_arc_lengths is None or len(
+            self.control_point_arc_lengths
+        ) != len(self.normals):
             # Fallback to uniform if not computed properly
             num_points = len(self.normals)
             control_arc_lengths = np.linspace(0, self.total_arc_length, num_points)
@@ -393,7 +397,9 @@ class StrokeSpline:
 
         return binormal / norm
 
-    def get_frame_at_arc_length(self, arc_length: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def get_frame_at_arc_length(
+        self, arc_length: float
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Get orientation frame (tangent, normal, binormal) at arc length
 
@@ -449,8 +455,7 @@ class StrokeSpline:
         return numerator / denominator
 
     def sample_by_arc_length(
-        self,
-        spacing: float
+        self, spacing: float
     ) -> List[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """
         Sample points along spline at uniform arc-length intervals
@@ -500,8 +505,10 @@ class StrokeSpline:
         self.total_arc_length = 0.0
 
     def __repr__(self) -> str:
-        return (f"StrokeSpline(points={len(self.control_points)}, "
-                f"length={self.total_arc_length:.3f})")
+        return (
+            f"StrokeSpline(points={len(self.control_points)}, "
+            f"length={self.total_arc_length:.3f})"
+        )
 
 
 def test_spline():

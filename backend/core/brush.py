@@ -399,15 +399,26 @@ class StrokePainter:
         self.stamp_placements: List[Tuple[np.ndarray, np.ndarray, np.ndarray, float]] = []
         self.last_stamp_arc_length: float = 0.0
         self.current_stroke_start_index: int = 0
+        # Store deformation flag for current stroke to ensure consistency
+        self.enable_deformation_for_current_stroke: bool = False
 
-    def start_stroke(self, position: np.ndarray, normal: np.ndarray):
+    def start_stroke(self, position: np.ndarray, normal: np.ndarray, enable_deformation: bool = None):
         """
         Start a new stroke
 
         Args:
             position: 3D starting position
             normal: Surface normal
+            enable_deformation: Enable deformation for this stroke (if None, uses config)
         """
+        # Determine and store deformation flag for this stroke
+        # This ensures consistency between stamp placement and finish_stroke
+        if enable_deformation is None:
+            from backend.config import config
+            enable_deformation = config.ENABLE_DEFORMATION
+
+        self.enable_deformation_for_current_stroke = enable_deformation
+
         # Create spline with 2D constraint for canvas painting
         self.current_stroke = StrokeSpline(force_2d=True)
         self.current_stroke.add_point(position, normal, threshold=0.0)
@@ -456,7 +467,7 @@ class StrokePainter:
             tangent = self.current_stroke.get_tangent_at_arc_length(arc_length)
             normal = self.current_stroke.get_normal_at_arc_length(arc_length)
 
-            if config.ENABLE_DEFORMATION:
+            if self.enable_deformation_for_current_stroke:
                 # Store placement info for deformation phase - don't apply rigid transform yet
                 self.stamp_placements.append((position, tangent, normal, arc_length))
 
@@ -494,10 +505,7 @@ class StrokePainter:
 
         # Phase 3-2: Apply non-rigid deformation
         if enable_deformation and len(self.placed_stamps) > 0:
-            from backend.config import config
-            deformation_strength = config.DEFORMATION_STRENGTH
-
-            print(f"[Deformation] Applying deformation to {len(self.placed_stamps)} stamps (strength={deformation_strength:.2f})")
+            print(f"[Deformation] Applying deformation to {len(self.placed_stamps)} stamps")
 
             # Remove temporarily placed rigid stamps from scene
             del self.scene[self.current_stroke_start_index:]
@@ -512,34 +520,43 @@ class StrokePainter:
                 # Extract original brush-local stamps and placement info
                 stamps_only = [gaussians for gaussians, _ in self.placed_stamps]
 
-                for i, (stamp, (position, tangent, normal, arc_length)) in enumerate(zip(stamps_only, self.stamp_placements)):
-                    from .deformation import deform_stamp_along_spline
+                # GPU-accelerated batch deformation (50-100× faster)
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        from .deformation_gpu import deform_all_stamps_batch_gpu
 
-                    # Apply deformation to original brush-local coordinates
-                    deformed = deform_stamp_along_spline(
-                        stamp,  # Original brush-local coordinates
-                        self.brush.center,
-                        stamp_frame,
-                        self.current_stroke,
-                        arc_length,
-                        position,
-                        tangent,
-                        normal
-                    )
+                        print(f"[Deformation] Using GPU batch deformation for {len(stamps_only)} stamps")
+                        deformed_stamps = deform_all_stamps_batch_gpu(
+                            all_stamps=stamps_only,
+                            stamp_center=self.brush.center,
+                            stamp_frame=stamp_frame,
+                            spline=self.current_stroke,
+                            stamp_placements=self.stamp_placements,
+                            device='cuda'
+                        )
+                    else:
+                        raise RuntimeError("CUDA not available")
+                except Exception as e:
+                    # Fallback to CPU deformation if GPU fails
+                    print(f"[Deformation] GPU deformation failed ({e}), falling back to CPU")
 
-                    # Apply deformation strength by blending
-                    if deformation_strength < 1.0:
-                        # For partial deformation, blend between rigid placement and deformation
-                        rigid_placed = self.brush.place_at(position, tangent, normal)
+                    for i, (stamp, (position, tangent, normal, arc_length)) in enumerate(zip(stamps_only, self.stamp_placements)):
+                        from .deformation import deform_stamp_along_spline
 
-                        for rigid, deform in zip(rigid_placed, deformed):
-                            # Blend position
-                            deform.position = (1.0 - deformation_strength) * rigid.position + deformation_strength * deform.position
-                            # Blend rotation using quaternion slerp
-                            from .quaternion_utils import quaternion_slerp
-                            deform.rotation = quaternion_slerp(rigid.rotation, deform.rotation, deformation_strength)
+                        # Apply deformation to original brush-local coordinates
+                        deformed = deform_stamp_along_spline(
+                            stamp,  # Original brush-local coordinates
+                            self.brush.center,
+                            stamp_frame,
+                            self.current_stroke,
+                            arc_length,
+                            position,
+                            tangent,
+                            normal
+                        )
 
-                    deformed_stamps.append(deformed)
+                        deformed_stamps.append(deformed)
             else:
                 # Fallback: Use placed stamps (old behavior, less accurate)
                 print("[Deformation] Warning: Using fallback deformation (less accurate)")
@@ -565,12 +582,6 @@ class StrokePainter:
                         tangent,
                         normal
                     )
-
-                    if deformation_strength < 1.0:
-                        for orig, deform in zip(stamp, deformed):
-                            # Blend position
-                            deform.position = (1.0 - deformation_strength) * orig.position + deformation_strength * deform.position
-                            # TODO: Blend rotation
 
                     deformed_stamps.append(deformed)
 

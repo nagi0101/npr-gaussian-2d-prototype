@@ -154,8 +154,8 @@ class PaintingSession:
         # Default normal (pointing up)
         normal = np.array([0, 0, 1], dtype=np.float32)
 
-        # Start stroke
-        self.current_painter.start_stroke(position_3d, normal)
+        # Start stroke with deformation flag
+        self.current_painter.start_stroke(position_3d, normal, enable_deformation=self.enable_deformation)
 
         # Send render
         print(f"[Session {self.session_id}] Sending render update")
@@ -324,12 +324,6 @@ class PaintingSession:
             self.enable_deformation = bool(data['enable_deformation'])
             print(f"[Session {self.session_id}] ✓ Deformation: {'ON' if self.enable_deformation else 'OFF'}")
 
-        if 'deformation_strength' in data:
-            strength = float(data['deformation_strength'])
-            # Update global config (will affect all new strokes)
-            config.DEFORMATION_STRENGTH = strength
-            print(f"[Session {self.session_id}] ✓ Deformation strength: {strength:.2f}")
-
         if 'enable_inpainting' in data:
             self.enable_inpainting = bool(data['enable_inpainting'])
             print(f"[Session {self.session_id}] ✓ Inpainting: {'ON' if self.enable_inpainting else 'OFF'}")
@@ -338,7 +332,6 @@ class PaintingSession:
             'type': 'feature_flags_updated',
             'flags': {
                 'enable_deformation': self.enable_deformation,
-                'deformation_strength': config.DEFORMATION_STRENGTH,
                 'enable_inpainting': self.enable_inpainting
             }
         })

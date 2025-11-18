@@ -28,7 +28,6 @@ class Config:
     # Phase 3 Features
     ENABLE_DEFORMATION: bool = True
     ENABLE_INPAINTING: bool = False
-    DEFORMATION_STRENGTH: float = 0.5  # 0.0-1.0 multiplier (0.5 = 50% deformation)
     INPAINT_OVERLAP_THRESHOLD: float = 0.1  # Distance threshold for overlap detection
 
     # Spline settings
