@@ -11,6 +11,8 @@ Achieves 50-100 FPS on RTX 3090 through:
 import torch
 import numpy as np
 from typing import List, Optional, Dict, Any
+from pathlib import Path
+from omegaconf import OmegaConf, DictConfig
 from .gaussian import Gaussian2D
 from .debug_visualizer import DebugVisualizer
 import cv2
@@ -69,6 +71,14 @@ class GaussianRenderer2D_GSplat:
         self.background_color = torch.tensor(
             background_color, dtype=torch.float32, device=self.device
         )
+
+        # Load configuration
+        config_path = Path(__file__).parent.parent / "config" / "brush_converter_config.yaml"
+        if config_path.exists():
+            self.config = OmegaConf.load(config_path)
+        else:
+            # Fallback default config
+            self.config = OmegaConf.create({"rendering": {"eps2d": 0.01}})
 
         # World space bounds
         self.world_min = torch.tensor(
@@ -215,7 +225,7 @@ class GaussianRenderer2D_GSplat:
         for i, g in enumerate(sorted_gaussians):
             positions[i] = g.position
             scales[i] = g.scale
-            scales[i][2] = 0.1  # Override z-scale: gsplat requires non-zero depth
+            # scales[i][2] = 0.1  # Override z-scale: gsplat requires non-zero depth
             rotations[i] = g.rotation
             opacities[i] = g.opacity
             colors[i] = g.color
@@ -260,8 +270,8 @@ class GaussianRenderer2D_GSplat:
                 # Critical parameters to prevent culling
                 near_plane=0.1,  # Adjusted near plane (default 0.01)
                 far_plane=10.0,  # Adjusted far plane (default 1e10)
-                radius_clip=0.0,  # Disable radius culling (default may cull small Gaussians)
-                eps2d=0.3,  # 2D covariance regularization
+                # radius_clip=0.0,  # Disable radius culling (default may cull small Gaussians)
+                eps2d=self.config.rendering.eps2d,  # 2D covariance regularization from config
             )
 
             # Extract RGB image

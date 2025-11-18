@@ -13,6 +13,14 @@ import logging
 from scipy.spatial import KDTree
 from skimage import morphology, measure
 from scipy import ndimage
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend
+import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
+import matplotlib.patches as mpatches
+from omegaconf import OmegaConf, DictConfig
+import os
+from datetime import datetime
 
 from .gaussian import Gaussian2D
 from .brush import BrushStamp
@@ -41,6 +49,8 @@ class BrushConverter:
         device: Optional[str] = None,
         use_midas: bool = True,
         target_gaussian_count: int = 200,  # Increased from 50 for better quality with importance sampling
+        config: Optional[DictConfig] = None,
+        debug_mode: bool = False,
     ):
         """
         Initialize brush converter
@@ -49,19 +59,53 @@ class BrushConverter:
             device: Device for computation ('cuda', 'cpu', or None for auto)
             use_midas: Whether to use MiDaS for depth (fallback to heuristics)
             target_gaussian_count: Target number of Gaussians per brush
+            config: Optional Hydra config (if None, will load default)
+            debug_mode: Enable debug visualization
         """
+        # Load configuration
+        if config is None:
+            config_path = Path(__file__).parent.parent / "config" / "brush_converter_config.yaml"
+            if config_path.exists():
+                self.config = OmegaConf.load(config_path)
+                logger.info(f"[BrushConverter] Loaded config from {config_path}")
+            else:
+                # Fallback to default config
+                self.config = OmegaConf.create({
+                    "debug": {"enabled": False, "visualize": False, "output_dir": "debug_output"},
+                    "gaussian": {"target_count": 800, "scale_multiplier": 0.6, "z_scale": 0.3},
+                    "contrast": {"enabled": True, "min_contrast": 0.3},
+                })
+                logger.warning(f"[BrushConverter] Config file not found, using defaults")
+        else:
+            self.config = config
+
+        # Override debug mode if specified
+        if debug_mode:
+            self.config.debug.enabled = True
+
         self.device = device or (
             "cuda" if np.random.rand() > 1.5 else "cpu"
         )  # For now use CPU
-        self.target_gaussian_count = target_gaussian_count
+
+        # Use config value or parameter
+        self.target_gaussian_count = self.config.gaussian.target_count if hasattr(self.config, 'gaussian') else target_gaussian_count
 
         # Initialize depth estimator
+        use_midas_config = self.config.depth.use_midas if hasattr(self.config, 'depth') else use_midas
         self.depth_estimator = create_depth_estimator(
-            prefer_midas=use_midas, device=self.device
+            prefer_midas=use_midas_config, device=self.device
         )
 
+        # Debug mode setup
+        self.debug_enabled = self.config.debug.enabled
+        if self.debug_enabled:
+            self.debug_data = {}  # Store intermediate results for visualization
+            output_dir = Path(self.config.debug.output_dir)
+            output_dir.mkdir(exist_ok=True, parents=True)
+            logger.info(f"[BrushConverter] Debug mode enabled, output: {output_dir}")
+
         logger.info(
-            f"[BrushConverter] Initialized with target {target_gaussian_count} Gaussians"
+            f"[BrushConverter] Initialized with target {self.target_gaussian_count} Gaussians"
         )
 
     def convert_2d_to_3dgs(
@@ -89,25 +133,46 @@ class BrushConverter:
             f"[BrushConverter] Converting '{brush_name}' with {depth_profile} profile"
         )
 
+        # Initialize debug data storage
+        if self.debug_enabled:
+            self.debug_data = {
+                'original_image': image.copy(),
+                'brush_name': brush_name,
+            }
+
         # Step 1: Depth estimation
         depth_map = self._estimate_depth(image, depth_profile, depth_scale)
+        if self.debug_enabled:
+            self.debug_data['depth_map'] = depth_map.copy()
 
         # Step 2: Extract alpha mask
         alpha_mask = self._extract_alpha_mask(image)
+        if self.debug_enabled:
+            self.debug_data['alpha_mask'] = alpha_mask.copy()
 
         # Step 3: Feature extraction (before point cloud for importance sampling)
         features = self._extract_features(image, alpha_mask)
+        if self.debug_enabled:
+            self.debug_data['features'] = {k: v.copy() for k, v in features.items()}
 
         # Step 4: Generate point cloud with importance-based sampling
         points, colors, normals = self._generate_point_cloud(
             image, depth_map, alpha_mask, features=features
         )
+        if self.debug_enabled:
+            self.debug_data['points'] = points.copy()
+            self.debug_data['colors'] = colors.copy()
+            self.debug_data['normals'] = normals.copy()
 
         # Step 5: Initialize Gaussians
         gaussians = self._initialize_gaussians(points, colors, normals, features)
+        if self.debug_enabled:
+            self.debug_data['gaussians_initial'] = [g.copy() for g in gaussians]
 
         # Step 6: Procedural refinement
         gaussians = self._refine_gaussians(gaussians, features)
+        if self.debug_enabled:
+            self.debug_data['gaussians_refined'] = [g.copy() for g in gaussians]
 
         # Step 7: Appearance optimization (if requested)
         if optimization_steps > 0:
@@ -117,6 +182,10 @@ class BrushConverter:
         brush = self._create_brush_stamp(gaussians, brush_name)
 
         logger.info(f"[BrushConverter] ✓ Created brush with {len(gaussians)} Gaussians")
+
+        # Generate debug visualization
+        if self.debug_enabled and self.config.debug.visualize:
+            self._visualize_pipeline(brush_name)
 
         return brush
 
@@ -146,7 +215,7 @@ class BrushConverter:
 
     def _extract_alpha_mask(self, image: np.ndarray) -> np.ndarray:
         """
-        Extract alpha channel or create from intensity
+        Extract alpha channel or create from intensity with adaptive background detection
 
         Args:
             image: Input image
@@ -154,18 +223,67 @@ class BrushConverter:
         Returns:
             Alpha mask (H, W) in range [0, 1]
         """
+        # Flag to determine if we need RGB-based extraction
+        use_rgb_extraction = True
+
         if len(image.shape) == 3 and image.shape[2] == 4:
-            # Use existing alpha channel
-            alpha = image[:, :, 3].astype(np.float32) / 255.0
-        else:
-            # Create from grayscale intensity
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            # Threshold to create mask
-            _, alpha = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
+            # Check if alpha channel is meaningful (has variation)
+            alpha_channel = image[:, :, 3].astype(np.float32) / 255.0
+            alpha_variance = np.var(alpha_channel)
+
+            if alpha_variance > 0.01:
+                # Meaningful alpha with variation - use it
+                alpha = alpha_channel
+                use_rgb_extraction = False
+                logger.info(f"[AlphaMask] Using existing alpha channel (variance={alpha_variance:.4f})")
+            else:
+                # Alpha is uniform (e.g., all 255) - ignore and extract from RGB
+                logger.info(f"[AlphaMask] Ignoring uniform alpha channel (variance={alpha_variance:.4f}), extracting from RGB")
+
+        if use_rgb_extraction:
+            # Create from grayscale intensity with adaptive thresholding
+            # Handle both RGB and RGBA images
+            if len(image.shape) == 3 and image.shape[2] >= 3:
+                gray = cv2.cvtColor(image[:, :, :3], cv2.COLOR_BGR2GRAY)
+            else:
+                gray = image
+
+            # Detect background color from corner pixels
+            h, w = gray.shape
+            margin = max(min(h, w) // 10, 5)  # Sample 10% margin from corners, minimum 5 pixels
+            corners = [
+                gray[0:margin, 0:margin],           # Top-left
+                gray[0:margin, w-margin:w],         # Top-right
+                gray[h-margin:h, 0:margin],         # Bottom-left
+                gray[h-margin:h, w-margin:w],       # Bottom-right
+            ]
+            bg_luminance = np.mean([np.mean(c) for c in corners])
+
+            logger.info(f"[AlphaMask] Detected background luminance: {bg_luminance:.1f}")
+
+            # Adaptive threshold based on background using Otsu's method
+            if bg_luminance > 128:
+                # Bright background → dark strokes → keep dark pixels
+                threshold_value, alpha = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                logger.info(f"[AlphaMask] Using THRESH_BINARY_INV + OTSU (bright background), threshold={threshold_value:.1f}")
+            else:
+                # Dark background → bright strokes → keep bright pixels
+                threshold_value, alpha = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                logger.info(f"[AlphaMask] Using THRESH_BINARY + OTSU (dark background), threshold={threshold_value:.1f}")
+
             alpha = alpha.astype(np.float32) / 255.0
 
-        # Smooth edges
-        alpha = cv2.GaussianBlur(alpha, (3, 3), 0.5)
+            # Store alpha before blur for debugging
+            if self.debug_enabled:
+                self.debug_data['alpha_before_blur'] = alpha.copy()
+                logger.info(f"[AlphaMask] Alpha stats before blur - Min: {np.min(alpha):.3f}, Max: {np.max(alpha):.3f}, Mean: {np.mean(alpha):.3f}")
+
+        # DISABLE GaussianBlur - it destroys the binary mask by averaging everything
+        # For small brush images, even a 3x3 kernel can blur away the entire structure
+        # alpha = cv2.GaussianBlur(alpha, (3, 3), 0.5)
+
+        if self.debug_enabled and 'alpha_before_blur' in self.debug_data:
+            logger.info(f"[AlphaMask] Alpha stats after blur disabled - Min: {np.min(alpha):.3f}, Max: {np.max(alpha):.3f}, Mean: {np.mean(alpha):.3f}")
 
         return alpha
 
@@ -174,7 +292,7 @@ class BrushConverter:
         image: np.ndarray,
         depth_map: np.ndarray,
         alpha_mask: np.ndarray,
-        alpha_threshold: float = 0.2,  # Increased from 0.1 to filter more semi-transparent pixels
+        alpha_threshold: float = 0.3,  # Increased to 0.3 to filter semi-transparent gray pixels
         features: Dict[str, np.ndarray] = None,  # Added for importance-based sampling
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -206,9 +324,11 @@ class BrushConverter:
             y_range = target_world_size
 
         # Create virtual camera (orthographic projection)
+        # Use 'xy' indexing to ensure correct X/Y mapping: xx[i,j] corresponds to X at column j
         xx, yy = np.meshgrid(
             np.linspace(-x_range, x_range, w),
-            np.linspace(-y_range, y_range, h)
+            np.linspace(-y_range, y_range, h),
+            indexing='xy'  # Cartesian indexing: xx varies along columns, yy along rows
         )
 
         # Create point cloud
@@ -221,16 +341,25 @@ class BrushConverter:
 
         # Importance-based adaptive sampling
         total_pixels = np.sum(mask)
+        importance_map = None
         if total_pixels > self.target_gaussian_count:
             # Compute importance map for quality-aware sampling
             importance_map = self._compute_importance_map(
                 image, depth_map, alpha_mask, features, mask
             )
 
+            # Store for debug visualization
+            if self.debug_enabled:
+                self.debug_data['importance_map'] = importance_map.copy()
+                self.debug_data['mask_before_sampling'] = mask.copy()
+
             # Weighted sampling based on importance
             mask = self._importance_based_sampling(
                 mask, importance_map, self.target_gaussian_count
             )
+
+            if self.debug_enabled:
+                self.debug_data['mask_after_sampling'] = mask.copy()
 
         # Compute luminance map with contrast enhancement
         if len(image.shape) == 3:
@@ -242,16 +371,20 @@ class BrushConverter:
         # Apply contrast stretching to enhance texture detail
         # Only stretch within valid mask region to avoid background affecting range
         valid_luminance = luminance_map[mask]
-        if len(valid_luminance) > 0:
-            lum_min = np.percentile(valid_luminance, 5)  # Use percentiles to avoid outliers
-            lum_max = np.percentile(valid_luminance, 95)
+        if len(valid_luminance) > 0 and self.config.contrast.enabled:
+            percentile_low = self.config.contrast.percentile_low
+            percentile_high = self.config.contrast.percentile_high
+            min_contrast = self.config.contrast.min_contrast
 
-            # Ensure minimum contrast range
-            if lum_max - lum_min < 0.2:
-                # Expand range to at least 0.2
+            lum_min = np.percentile(valid_luminance, percentile_low)  # Use percentiles to avoid outliers
+            lum_max = np.percentile(valid_luminance, percentile_high)
+
+            # Ensure minimum contrast range (use config value)
+            if lum_max - lum_min < min_contrast:
+                # Expand range to at least min_contrast
                 center = (lum_min + lum_max) / 2
-                lum_min = max(0.0, center - 0.1)
-                lum_max = min(1.0, center + 0.1)
+                lum_min = max(0.0, center - min_contrast / 2)
+                lum_max = min(1.0, center + min_contrast / 2)
 
             # Apply contrast stretching
             luminance_map = np.clip((luminance_map - lum_min) / (lum_max - lum_min + 1e-8), 0.0, 1.0)
@@ -358,16 +491,18 @@ class BrushConverter:
         importance = np.zeros((h, w), dtype=np.float32)
 
         # Component 1: Gradient magnitude (edges and texture)
-        if len(image.shape) == 3:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = image
-
-        grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-        grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-        gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
-        gradient_magnitude = cv2.GaussianBlur(gradient_magnitude, (5, 5), 1.0)
-        gradient_normalized = gradient_magnitude / (np.max(gradient_magnitude) + 1e-8)
+        # DISABLED: Gradient is luminance-dependent and causes uneven sampling
+        # Gaussians should be placed based on structure (skeleton + thickness) only
+        # if len(image.shape) == 3:
+        #     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # else:
+        #     gray = image
+        #
+        # grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        # grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        # gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+        # gradient_magnitude = cv2.GaussianBlur(gradient_magnitude, (5, 5), 1.0)
+        # gradient_normalized = gradient_magnitude / (np.max(gradient_magnitude) + 1e-8)
 
         # Component 2: Thickness map (thick regions need more Gaussians for coverage)
         if features is not None and 'thickness_map' in features:
@@ -391,13 +526,12 @@ class BrushConverter:
             skeleton_importance = np.ones((h, w), dtype=np.float32)
 
         # Combine importance components with weights
-        # Gradient: 20% - edges and details (reduced to avoid over-clustering at edges)
-        # Thickness: 40% - coverage of thick areas (increased for better fill)
-        # Skeleton: 40% - structural integrity (increased for even distribution)
+        # Gradient: REMOVED - luminance-dependent, causes uneven distribution
+        # Thickness: 50% - coverage of thick areas
+        # Skeleton: 50% - structural integrity and even distribution
         importance = (
-            0.2 * gradient_normalized +
-            0.4 * thickness_normalized +
-            0.4 * skeleton_importance
+            0.5 * thickness_normalized +
+            0.5 * skeleton_importance
         )
 
         # Apply alpha mask (only consider visible regions)
@@ -664,13 +798,23 @@ class BrushConverter:
 
             # Thickness-based anisotropic scale
             # Thicker regions get larger Gaussians for better coverage
-            thickness_scale = np.clip(thickness * 2.0, 0.5, 2.0) if 0 <= x_img < features["thickness"].shape[1] and 0 <= y_img < features["thickness"].shape[0] else 1.0
+            # Use config values for scale parameters
+            scale_mult = self.config.gaussian.scale_multiplier
+            z_scale = self.config.gaussian.z_scale
+
+            if self.config.gaussian.thickness.enabled:
+                thickness_mult = self.config.gaussian.thickness.multiplier
+                min_t_scale = self.config.gaussian.thickness.min_scale
+                max_t_scale = self.config.gaussian.thickness.max_scale
+                thickness_scale = np.clip(thickness * thickness_mult, min_t_scale, max_t_scale) if 0 <= x_img < features["thickness"].shape[1] and 0 <= y_img < features["thickness"].shape[0] else 1.0
+            else:
+                thickness_scale = 1.0
 
             scale = np.array(
                 [
-                    avg_distance * 2.0 * thickness_scale,  # X scale (increased from 1.5, modulated by thickness)
-                    avg_distance * 2.0 * thickness_scale,  # Y scale (increased from 1.5, modulated by thickness)
-                    avg_distance * 0.3,  # Z scale (thin in depth)
+                    avg_distance * scale_mult * thickness_scale,  # X scale
+                    avg_distance * scale_mult * thickness_scale,  # Y scale
+                    avg_distance * z_scale,  # Z scale (thin in depth)
                 ]
             )
 
@@ -981,9 +1125,10 @@ class BrushConverter:
             size = np.linalg.norm(max_pos - min_pos)
 
         # Create orientation frame (identity for converted brushes)
-        tangent = np.array([1, 0, 0])
-        normal = np.array([0, 1, 0])
-        binormal = np.array([0, 0, 1])
+        # Match brush.py default frame: tangent=X, normal=Z(up), binormal=Y
+        tangent = np.array([1, 0, 0])  # X-axis (horizontal, brush direction)
+        normal = np.array([0, 0, 1])   # Z-axis (up, surface normal)
+        binormal = np.array([0, 1, 0]) # Y-axis (forward, perpendicular)
 
         # Create brush stamp (no parameters in constructor)
         brush = BrushStamp()
@@ -1009,6 +1154,344 @@ class BrushConverter:
         }
 
         return brush
+
+    def _visualize_pipeline(self, brush_name: str):
+        """
+        Visualize the entire conversion pipeline in a single comprehensive image
+
+        Args:
+            brush_name: Name of the brush being converted
+        """
+        try:
+            logger.info("[Visualizer] Generating pipeline visualization...")
+
+            # Create figure with subplots
+            fig = plt.figure(figsize=self.config.visualization.figure_size, dpi=self.config.visualization.dpi)
+            fig.suptitle(f'Brush Conversion Pipeline: {brush_name}', fontsize=16, fontweight='bold')
+
+            # Define grid layout (4 rows x 4 columns)
+            gs = fig.add_gridspec(4, 4, hspace=0.3, wspace=0.3)
+
+            # Row 1: Original, Depth, Alpha, Features
+            ax1 = fig.add_subplot(gs[0, 0])
+            ax2 = fig.add_subplot(gs[0, 1])
+            ax3 = fig.add_subplot(gs[0, 2])
+            ax4 = fig.add_subplot(gs[0, 3])
+
+            # Row 2: Skeleton, Thickness, Flow, Importance
+            ax5 = fig.add_subplot(gs[1, 0])
+            ax6 = fig.add_subplot(gs[1, 1])
+            ax7 = fig.add_subplot(gs[1, 2])
+            ax8 = fig.add_subplot(gs[1, 3])
+
+            # Row 3: Point Cloud, Luminance, Sampling, Gaussians
+            ax9 = fig.add_subplot(gs[2, 0])
+            ax10 = fig.add_subplot(gs[2, 1])
+            ax11 = fig.add_subplot(gs[2, 2])
+            ax12 = fig.add_subplot(gs[2, 3])
+
+            # Row 4: Gaussian Detail Views
+            ax13 = fig.add_subplot(gs[3, 0])
+            ax14 = fig.add_subplot(gs[3, 1])
+            ax15 = fig.add_subplot(gs[3, 2])
+            ax16 = fig.add_subplot(gs[3, 3])
+
+            # 1. Original Image
+            self._plot_image(ax1, self.debug_data['original_image'], "1. Original Image")
+
+            # 2. Depth Map
+            self._plot_heatmap(ax2, self.debug_data['depth_map'], "2. Depth Map", cmap='plasma')
+
+            # 3. Alpha Mask
+            self._plot_heatmap(ax3, self.debug_data['alpha_mask'], "3. Alpha Mask", cmap='gray')
+
+            # 4. Combined Features Overlay
+            self._plot_features_overlay(ax4, self.debug_data['original_image'], self.debug_data['features'])
+
+            # 5. Skeleton
+            self._plot_heatmap(ax5, self.debug_data['features']['skeleton'], "5. Skeleton", cmap='gray')
+
+            # 6. Thickness Map
+            self._plot_heatmap(ax6, self.debug_data['features']['thickness'], "6. Thickness Map", cmap='hot')
+
+            # 7. Flow Field
+            self._plot_flow_field(ax7, self.debug_data['features'])
+
+            # 8. Importance Map
+            if 'importance_map' in self.debug_data:
+                self._plot_heatmap(ax8, self.debug_data['importance_map'], "8. Importance Map", cmap='viridis')
+            else:
+                ax8.text(0.5, 0.5, 'No importance\nmap generated', ha='center', va='center')
+                ax8.axis('off')
+
+            # 9. Point Cloud Distribution
+            self._plot_point_cloud(ax9)
+
+            # 10. Luminance Distribution
+            self._plot_luminance_histogram(ax10)
+
+            # 11. Sampling Comparison
+            if 'mask_before_sampling' in self.debug_data and 'mask_after_sampling' in self.debug_data:
+                self._plot_sampling_comparison(ax11)
+            else:
+                ax11.text(0.5, 0.5, 'No sampling\nperformed', ha='center', va='center')
+                ax11.axis('off')
+
+            # 12. Gaussian Positions
+            self._plot_gaussian_positions(ax12)
+
+            # 13. Gaussian Scale Distribution
+            self._plot_gaussian_scales(ax13)
+
+            # 14. Gaussian Orientation
+            self._plot_gaussian_orientations(ax14)
+
+            # 15. Gaussian Opacity Distribution
+            self._plot_gaussian_opacities(ax15)
+
+            # 16. Statistics Summary
+            self._plot_statistics_summary(ax16)
+
+            # Save figure
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = Path(self.config.debug.output_dir) / f"{brush_name}_{timestamp}_pipeline.png"
+            plt.savefig(output_path, bbox_inches='tight', dpi=self.config.visualization.dpi)
+            plt.close(fig)
+
+            logger.info(f"[Visualizer] ✓ Saved visualization to {output_path}")
+
+        except Exception as e:
+            logger.error(f"[Visualizer] Failed to generate visualization: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _plot_image(self, ax, image, title):
+        """Plot RGB/RGBA image"""
+        if len(image.shape) == 3 and image.shape[2] == 4:
+            # RGBA - show alpha blended on white
+            alpha = image[:, :, 3:4] / 255.0
+            rgb = image[:, :, :3] / 255.0
+            composite = rgb * alpha + (1 - alpha)
+            ax.imshow(composite)
+        elif len(image.shape) == 3:
+            ax.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        else:
+            ax.imshow(image, cmap='gray')
+        ax.set_title(title, fontsize=10, fontweight='bold')
+        ax.axis('off')
+
+    def _plot_heatmap(self, ax, data, title, cmap='viridis'):
+        """Plot heatmap with colorbar"""
+        im = ax.imshow(data, cmap=cmap)
+        ax.set_title(title, fontsize=10, fontweight='bold')
+        ax.axis('off')
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    def _plot_features_overlay(self, ax, image, features):
+        """Plot skeleton and thickness overlaid on original"""
+        # Create composite
+        base = cv2.cvtColor(image[:, :, :3], cv2.COLOR_BGR2RGB) / 255.0 * 0.5
+
+        # Overlay skeleton in red
+        skeleton_mask = features['skeleton'] > 0
+        base[skeleton_mask] = [1, 0, 0]  # Red for skeleton
+
+        # Overlay thickness as heat
+        thickness_norm = features['thickness'] / (features['thickness'].max() + 1e-8)
+        base[:, :, 1] += thickness_norm * 0.5  # Add green for thickness
+        base = np.clip(base, 0, 1)
+
+        ax.imshow(base)
+        ax.set_title('4. Features Overlay\n(Red=Skeleton, Green=Thickness)', fontsize=10, fontweight='bold')
+        ax.axis('off')
+
+    def _plot_flow_field(self, ax, features):
+        """Plot optical flow field"""
+        flow_x = features['flow_x']
+        flow_y = features['flow_y']
+        grad_mag = features['grad_magnitude']
+
+        # Downsample for visualization
+        h, w = flow_x.shape
+        step = max(h // 20, w // 20, 1)
+
+        y_coords, x_coords = np.mgrid[step//2:h:step, step//2:w:step]
+
+        ax.imshow(grad_mag, cmap='gray', alpha=0.5)
+        ax.quiver(
+            x_coords, y_coords,
+            flow_x[y_coords, x_coords],
+            flow_y[y_coords, x_coords],
+            color='cyan', scale=50, width=0.003
+        )
+        ax.set_title('7. Flow Field', fontsize=10, fontweight='bold')
+        ax.axis('off')
+
+    def _plot_point_cloud(self, ax):
+        """Plot 3D point cloud distribution"""
+        points = self.debug_data['points']
+        colors = self.debug_data['colors']
+
+        # Project to 2D (x, y)
+        ax.scatter(points[:, 0], points[:, 1], c=colors[:, 0], cmap='gray', s=5, alpha=0.6)
+        ax.set_title(f'9. Point Cloud\n({len(points)} points)', fontsize=10, fontweight='bold')
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.3)
+
+    def _plot_luminance_histogram(self, ax):
+        """Plot luminance value distribution"""
+        colors = self.debug_data['colors']
+        luminance = colors[:, 0]  # Grayscale, so all channels are same
+
+        ax.hist(luminance, bins=50, color='gray', alpha=0.7, edgecolor='black')
+        ax.set_title('10. Luminance Distribution', fontsize=10, fontweight='bold')
+        ax.set_xlabel('Luminance Value')
+        ax.set_ylabel('Count')
+        ax.grid(True, alpha=0.3)
+
+        # Add statistics
+        mean_lum = np.mean(luminance)
+        std_lum = np.std(luminance)
+        ax.axvline(mean_lum, color='red', linestyle='--', label=f'Mean: {mean_lum:.3f}')
+        ax.legend()
+
+    def _plot_sampling_comparison(self, ax):
+        """Compare before/after sampling"""
+        before = self.debug_data['mask_before_sampling']
+        after = self.debug_data['mask_after_sampling']
+
+        # Create RGB composite
+        h, w = before.shape
+        composite = np.zeros((h, w, 3))
+        composite[before, 0] = 0.5  # Red for all valid pixels
+        composite[after, 1] = 1.0  # Green for sampled pixels
+
+        ax.imshow(composite)
+        ax.set_title(f'11. Sampling\nBefore: {np.sum(before)} → After: {np.sum(after)}',
+                     fontsize=10, fontweight='bold')
+        ax.axis('off')
+
+    def _plot_gaussian_positions(self, ax):
+        """Plot Gaussian positions with size indication"""
+        gaussians = self.debug_data['gaussians_initial']
+
+        for g in gaussians:
+            # Draw ellipse representing Gaussian
+            angle = np.arctan2(2*(g.rotation[3]*g.rotation[2] + g.rotation[0]*g.rotation[1]),
+                               1 - 2*(g.rotation[1]**2 + g.rotation[2]**2))
+            angle_deg = np.degrees(angle)
+
+            ellipse = Ellipse(
+                (g.position[0], g.position[1]),
+                width=g.scale[0]*2, height=g.scale[1]*2,
+                angle=angle_deg,
+                facecolor='none',
+                edgecolor=plt.cm.gray(g.color[0]),
+                linewidth=0.5,
+                alpha=g.opacity
+            )
+            ax.add_patch(ellipse)
+
+        # Set axis limits
+        positions = np.array([g.position for g in gaussians])
+        ax.set_xlim(positions[:, 0].min() - 0.1, positions[:, 0].max() + 0.1)
+        ax.set_ylim(positions[:, 1].min() - 0.1, positions[:, 1].max() + 0.1)
+        ax.set_title(f'12. Gaussian Positions\n({len(gaussians)} Gaussians)', fontsize=10, fontweight='bold')
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.3)
+
+    def _plot_gaussian_scales(self, ax):
+        """Plot distribution of Gaussian scales"""
+        gaussians = self.debug_data['gaussians_initial']
+        scales = np.array([g.scale for g in gaussians])
+
+        ax.hist(scales[:, 0], bins=30, alpha=0.7, label='X scale', color='red')
+        ax.hist(scales[:, 1], bins=30, alpha=0.7, label='Y scale', color='green')
+        ax.hist(scales[:, 2], bins=30, alpha=0.7, label='Z scale', color='blue')
+        ax.set_title('13. Gaussian Scale Distribution', fontsize=10, fontweight='bold')
+        ax.set_xlabel('Scale Value')
+        ax.set_ylabel('Count')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        # Add statistics
+        mean_scale = np.mean(scales[:, :2])  # X, Y scales
+        ax.axvline(mean_scale, color='black', linestyle='--', linewidth=2, label=f'Mean XY: {mean_scale:.4f}')
+
+    def _plot_gaussian_orientations(self, ax):
+        """Plot Gaussian orientation distribution"""
+        gaussians = self.debug_data['gaussians_initial']
+
+        # Extract rotation angles
+        angles = []
+        for g in gaussians:
+            angle = np.arctan2(2*(g.rotation[3]*g.rotation[2] + g.rotation[0]*g.rotation[1]),
+                               1 - 2*(g.rotation[1]**2 + g.rotation[2]**2))
+            angles.append(np.degrees(angle))
+
+        ax.hist(angles, bins=36, color='purple', alpha=0.7, edgecolor='black')
+        ax.set_title('14. Gaussian Orientations', fontsize=10, fontweight='bold')
+        ax.set_xlabel('Angle (degrees)')
+        ax.set_ylabel('Count')
+        ax.grid(True, alpha=0.3)
+
+    def _plot_gaussian_opacities(self, ax):
+        """Plot Gaussian opacity distribution"""
+        gaussians = self.debug_data['gaussians_initial']
+        opacities = [g.opacity for g in gaussians]
+
+        ax.hist(opacities, bins=30, color='orange', alpha=0.7, edgecolor='black')
+        ax.set_title('15. Gaussian Opacity Distribution', fontsize=10, fontweight='bold')
+        ax.set_xlabel('Opacity')
+        ax.set_ylabel('Count')
+        ax.grid(True, alpha=0.3)
+
+        # Add statistics
+        mean_opacity = np.mean(opacities)
+        ax.axvline(mean_opacity, color='red', linestyle='--', linewidth=2, label=f'Mean: {mean_opacity:.3f}')
+        ax.legend()
+
+    def _plot_statistics_summary(self, ax):
+        """Plot text summary of statistics"""
+        ax.axis('off')
+
+        gaussians = self.debug_data['gaussians_initial']
+        scales = np.array([g.scale for g in gaussians])
+        opacities = [g.opacity for g in gaussians]
+        colors = self.debug_data['colors']
+
+        stats_text = f"""
+CONVERSION STATISTICS
+
+Gaussians: {len(gaussians)}
+Points: {len(self.debug_data['points'])}
+
+Scale (XY):
+  Mean: {np.mean(scales[:, :2]):.4f}
+  Std: {np.std(scales[:, :2]):.4f}
+  Min: {np.min(scales[:, :2]):.4f}
+  Max: {np.max(scales[:, :2]):.4f}
+
+Opacity:
+  Mean: {np.mean(opacities):.3f}
+  Std: {np.std(opacities):.3f}
+
+Luminance:
+  Mean: {np.mean(colors[:, 0]):.3f}
+  Std: {np.std(colors[:, 0]):.3f}
+  Contrast: {np.max(colors[:, 0]) - np.min(colors[:, 0]):.3f}
+
+Config:
+  Scale Mult: {self.config.gaussian.scale_multiplier}
+  Min Contrast: {self.config.contrast.min_contrast}
+  eps2d: {self.config.rendering.eps2d}
+        """
+
+        ax.text(0.1, 0.9, stats_text.strip(), fontsize=9, fontfamily='monospace',
+                verticalalignment='top', transform=ax.transAxes)
+        ax.set_title('16. Statistics Summary', fontsize=10, fontweight='bold')
 
 
 def test_brush_converter():

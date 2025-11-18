@@ -439,7 +439,8 @@ class PaintingSession:
             # Create converter (run in thread pool to avoid blocking)
             converter = BrushConverter(
                 use_midas=False,  # Use heuristic for now (faster)
-                target_gaussian_count=800  # Increased for better texture detail with aspect ratio fix
+                target_gaussian_count=800,  # Increased for better texture detail with aspect ratio fix
+                debug_mode=True  # Enable debug visualization
             )
 
             # Update progress
