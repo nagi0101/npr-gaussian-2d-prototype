@@ -1,0 +1,74 @@
+{
+  "82c6bfb1-d9cb-47a5-bc23-25e9c59e6364": {
+    "id": "82c6bfb1-d9cb-47a5-bc23-25e9c59e6364",
+    "name": "Soft Round",
+    "type": "programmatic",
+    "source": "circular",
+    "created_at": "2025-11-18T15:59:37.665280",
+    "modified_at": "2025-11-18T15:59:37.665294",
+    "gaussian_count": 20,
+    "tags": [],
+    "thumbnail_path": null,
+    "file_path": "brushes/brush_82c6bfb1-d9cb-47a5-bc23-25e9c59e6364.json"
+  },
+  "983fd69d-ee5d-45c4-bf32-6b62e26d7636": {
+    "id": "983fd69d-ee5d-45c4-bf32-6b62e26d7636",
+    "name": "Hard Round",
+    "type": "programmatic",
+    "source": "circular",
+    "created_at": "2025-11-18T15:59:37.668514",
+    "modified_at": "2025-11-18T15:59:37.668522",
+    "gaussian_count": 15,
+    "tags": [],
+    "thumbnail_path": null,
+    "file_path": "brushes/brush_983fd69d-ee5d-45c4-bf32-6b62e26d7636.json"
+  },
+  "ae3b92f1-800a-4674-a056-9a1ff7c20af2": {
+    "id": "ae3b92f1-800a-4674-a056-9a1ff7c20af2",
+    "name": "Pencil",
+    "type": "programmatic",
+    "source": "line",
+    "created_at": "2025-11-18T15:59:37.692474",
+    "modified_at": "2025-11-18T15:59:37.692491",
+    "gaussian_count": 10,
+    "tags": [],
+    "thumbnail_path": null,
+    "file_path": "brushes/brush_ae3b92f1-800a-4674-a056-9a1ff7c20af2.json"
+  },
+  "4d2abad4-1b5e-4f5e-b960-d80edf97cd91": {
+    "id": "4d2abad4-1b5e-4f5e-b960-d80edf97cd91",
+    "name": "Marker",
+    "type": "programmatic",
+    "source": "grid",
+    "created_at": "2025-11-18T15:59:37.695708",
+    "modified_at": "2025-11-18T15:59:37.695718",
+    "gaussian_count": 9,
+    "tags": [],
+    "thumbnail_path": null,
+    "file_path": "brushes/brush_4d2abad4-1b5e-4f5e-b960-d80edf97cd91.json"
+  },
+  "98ba48ce-c62d-4538-9146-a636fe2c76b8": {
+    "id": "98ba48ce-c62d-4538-9146-a636fe2c76b8",
+    "name": "brush_4bf9e42f",
+    "type": "converted",
+    "source": "image",
+    "created_at": "2025-11-18T16:07:08.930812",
+    "modified_at": "2025-11-18T16:07:08.930855",
+    "gaussian_count": 800,
+    "tags": [],
+    "thumbnail_path": null,
+    "file_path": "brushes/brush_98ba48ce-c62d-4538-9146-a636fe2c76b8.json"
+  },
+  "65066ece-62e6-4555-88cf-ab524a5dab03": {
+    "id": "65066ece-62e6-4555-88cf-ab524a5dab03",
+    "name": "brush_6da44d06",
+    "type": "converted",
+    "source": "image",
+    "created_at": "2025-11-18T16:23:38.856212",
+    "modified_at": "2025-11-18T16:23:38.856245",
+    "gaussian_count": 800,
+    "tags": [],
+    "thumbnail_path": null,
+    "file_path": "brushes/brush_65066ece-62e6-4555-88cf-ab524a5dab03.json"
+  }
+}
