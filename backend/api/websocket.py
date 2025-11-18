@@ -115,8 +115,21 @@ class PaintingSession:
                 await self._handle_set_debug_mode(data)
             elif msg_type == 'set_debug_options':
                 await self._handle_set_debug_options(data)
+            elif msg_type == 'convert_brush_from_image':
+                await self._handle_convert_brush_from_image(data)
             elif msg_type == 'request_render':
                 await self.send_render()
+            # Brush library management
+            elif msg_type == 'save_brush':
+                await self._handle_save_brush(data)
+            elif msg_type == 'load_brush':
+                await self._handle_load_brush(data)
+            elif msg_type == 'list_brushes':
+                await self._handle_list_brushes()
+            elif msg_type == 'delete_brush':
+                await self._handle_delete_brush(data)
+            elif msg_type == 'update_brush_metadata':
+                await self._handle_update_brush_metadata(data)
             else:
                 print(f"[Session {self.session_id}] ✗ Unknown message type: {msg_type}")
                 await self.send_error(f"Unknown message type: {msg_type}")
@@ -192,30 +205,36 @@ class PaintingSession:
         })
 
     async def _handle_set_brush_params(self, data: dict):
-        """Set brush parameters"""
+        """Set brush parameters using the new parameter system"""
+        # Collect parameters to apply
+        params_to_apply = {}
+
         if 'spacing' in data:
-            self.brush.spacing = float(data['spacing'])
+            params_to_apply['spacing'] = float(data['spacing'])
 
         if 'size' in data:
-            size_factor = float(data['size'])
-            # Scale all Gaussians in brush
-            for g in self.brush.gaussians:
-                g.scale *= size_factor
+            # Size is now a multiplier, not cumulative
+            params_to_apply['size_multiplier'] = float(data['size'])
 
         if 'opacity' in data:
-            opacity = float(data['opacity'])
-            self.brush.set_opacity(opacity)
+            # This is global opacity multiplier
+            params_to_apply['global_opacity'] = float(data['opacity'])
 
         if 'color' in data:
             color = np.array(data['color'], dtype=np.float32)
-            self.brush.set_color(color)
+            params_to_apply['color'] = color
+
+        # Apply all parameters at once
+        if params_to_apply:
+            self.brush.apply_parameters(**params_to_apply)
 
         await self.send_message({
             'type': 'brush_params_updated',
             'params': {
                 'spacing': self.brush.spacing,
-                'size': self.brush.size,
-                'opacity': self.brush.gaussians[0].opacity if len(self.brush.gaussians) > 0 else 0.8
+                'size': self.brush.current_size_multiplier,
+                'opacity': self.brush.current_global_opacity,
+                'color': self.brush.current_color.tolist()
             }
         })
 
@@ -255,14 +274,49 @@ class PaintingSession:
 
         self.brush.spacing = config.DEFAULT_BRUSH_SPACING
 
+        # Apply the requested color to the pattern
+        self.brush.apply_parameters(color=color)
+
         # Recreate painter with new brush
         self.current_painter = StrokePainter(self.brush, self.scene_gaussians)
+
+        # Auto-save programmatic brush to library
+        from backend.core.brush_manager import get_brush_manager
+        brush_manager = get_brush_manager()
+
+        # Generate descriptive name based on pattern
+        pattern_names = {
+            'circular': 'Circular Brush',
+            'line': 'Line Brush',
+            'grid': 'Grid Brush'
+        }
+        brush_name = pattern_names.get(pattern, 'Custom Brush')
+
+        # Save the brush
+        brush_id = brush_manager.save_brush(
+            self.brush,
+            name=brush_name,
+            brush_type='programmatic',
+            source=pattern
+        )
 
         await self.send_message({
             'type': 'brush_created',
             'pattern': pattern,
-            'num_gaussians': len(self.brush.gaussians)
+            'num_gaussians': len(self.brush.gaussians),
+            'brush_id': brush_id,
+            'brush_name': brush_name
         })
+
+        # Send updated brush list
+        brushes = brush_manager.list_brushes()
+        await self.send_message({
+            'type': 'brush_list',
+            'brushes': brushes
+        })
+
+        # Send a render update to show the brush preview
+        await self.send_render()
 
     async def _handle_set_feature_flags(self, data: dict):
         """Set Phase 3 feature flags"""
@@ -321,6 +375,177 @@ class PaintingSession:
         # Re-render with new debug options
         await self.send_render()
 
+    async def _handle_convert_brush_from_image(self, data: dict):
+        """Convert uploaded image to 3DGS brush"""
+        import asyncio
+        from backend.api.upload import get_upload_image, update_upload_status
+        from backend.core.brush_converter import BrushConverter
+
+        upload_id = data.get('upload_id')
+        image_data = data.get('image_data')
+        depth_profile = data.get('depth_profile', 'flat')  # Default to flat for 2D brush images
+        depth_scale = data.get('depth_scale', 0.2)
+
+        # Check if we have either upload_id or direct image_data
+        if not upload_id and not image_data:
+            await self.send_error("No upload_id or image_data provided")
+            return
+
+        if upload_id:
+            print(f"[Session {self.session_id}] Converting brush from upload {upload_id}")
+        else:
+            print(f"[Session {self.session_id}] Converting brush from direct image data")
+
+        try:
+            # Send initial progress
+            await self.send_message({
+                'type': 'conversion_progress',
+                'upload_id': upload_id,
+                'progress': 10,
+                'status': 'Loading image...'
+            })
+
+            # Get image either from direct data or upload storage
+            image = None
+
+            # Check if image data was provided directly (for testing/direct conversion)
+            image_data = data.get('image_data')
+            if image_data and image_data.startswith('data:image'):
+                # Extract base64 data from data URI
+                import base64
+                from PIL import Image
+                import io
+
+                # Remove data URI prefix
+                base64_str = image_data.split(',')[1]
+                image_bytes = base64.b64decode(base64_str)
+
+                # Load image
+                pil_image = Image.open(io.BytesIO(image_bytes))
+                if pil_image.mode != 'RGBA':
+                    pil_image = pil_image.convert('RGBA')
+
+                # Convert to numpy array
+                image = np.array(pil_image)
+                print(f"[Session {self.session_id}] Using direct image data: {image.shape}")
+            else:
+                # Get uploaded image from storage
+                image = get_upload_image(upload_id)
+                if image is None:
+                    await self.send_error(f"Upload {upload_id} not found")
+                    return
+
+            # Update progress
+            await self.send_message({
+                'type': 'conversion_progress',
+                'upload_id': upload_id,
+                'progress': 20,
+                'status': 'Estimating depth...'
+            })
+
+            # Create converter (run in thread pool to avoid blocking)
+            converter = BrushConverter(
+                use_midas=False,  # Use heuristic for now (faster)
+                target_gaussian_count=800  # Increased for better texture detail with aspect ratio fix
+            )
+
+            # Update progress
+            await self.send_message({
+                'type': 'conversion_progress',
+                'upload_id': upload_id,
+                'progress': 40,
+                'status': 'Generating point cloud...'
+            })
+
+            # Convert to 3DGS brush (run in thread pool)
+            loop = asyncio.get_event_loop()
+            brush_name = f"brush_{upload_id[:8]}" if upload_id else "direct_brush"
+            brush_stamp = await loop.run_in_executor(
+                None,
+                converter.convert_2d_to_3dgs,
+                image,
+                brush_name,
+                depth_profile,
+                depth_scale,
+                0  # No optimization for now
+            )
+
+            # Update progress
+            await self.send_message({
+                'type': 'conversion_progress',
+                'upload_id': upload_id,
+                'progress': 80,
+                'status': 'Creating brush...'
+            })
+
+            # Store as current brush
+            self.brush = brush_stamp
+            gaussian_count = len(brush_stamp.gaussians)
+
+            # Recreate painter with new brush
+            self.current_painter = StrokePainter(self.brush, self.scene_gaussians)
+
+            print(f"[Session {self.session_id}] ✓ Created brush with {gaussian_count} Gaussians")
+
+            # Auto-save converted brush to library
+            from backend.core.brush_manager import get_brush_manager
+            brush_manager = get_brush_manager()
+            brush_id = brush_manager.save_brush(
+                brush_stamp,
+                name=brush_stamp.metadata.get('name', 'Converted Brush'),
+                brush_type='converted',
+                source='image'
+            )
+
+            # Update upload status (only if we have an upload_id)
+            if upload_id:
+                update_upload_status(upload_id, 'completed', 100)
+
+            # Prepare brush data for frontend preview
+            brush_data = {
+                'gaussians': [
+                    {
+                        'position': g.position.tolist() if hasattr(g.position, 'tolist') else g.position,
+                        'scale': g.scale.tolist() if hasattr(g.scale, 'tolist') else g.scale,
+                        'rotation': g.rotation.tolist() if hasattr(g.rotation, 'tolist') else g.rotation,
+                        'opacity': float(g.opacity),
+                        'color': g.color.tolist() if hasattr(g.color, 'tolist') else g.color
+                    }
+                    for g in brush_stamp.gaussians  # Send all Gaussians for full detail
+                ],
+                'metadata': brush_stamp.metadata,
+                'center': brush_stamp.center.tolist() if hasattr(brush_stamp.center, 'tolist') else brush_stamp.center,
+                'size': float(brush_stamp.size),
+                'spacing': float(brush_stamp.spacing)
+            }
+
+            # Send completion message
+            await self.send_message({
+                'type': 'conversion_complete',
+                'upload_id': upload_id,
+                'brush_name': brush_stamp.metadata.get('name', 'converted_brush'),
+                'gaussian_count': gaussian_count,
+                'progress': 100,
+                'brush_data': brush_data
+            })
+
+            # Send updated stats
+            await self.send_stats()
+
+        except Exception as e:
+            error_msg = f"Conversion failed: {str(e)}"
+            print(f"[Session {self.session_id}] ✗ {error_msg}")
+
+            # Update upload status (only if we have an upload_id)
+            if upload_id:
+                update_upload_status(upload_id, 'failed', 0)
+
+            await self.send_message({
+                'type': 'conversion_failed',
+                'upload_id': upload_id,
+                'error': error_msg
+            })
+
     async def send_render(self):
         """Render current scene and send to client"""
         try:
@@ -363,6 +588,162 @@ class PaintingSession:
             'type': 'error',
             'message': error_msg
         })
+
+    # Brush Library Management Handlers
+    async def _handle_save_brush(self, data: dict):
+        """Save current brush to library"""
+        from backend.core.brush_manager import get_brush_manager
+
+        if self.brush is None:
+            await self.send_error("No active brush to save")
+            return
+
+        brush_manager = get_brush_manager()
+        name = data.get('name', 'Unnamed Brush')
+        brush_type = data.get('type', 'custom')
+        source = data.get('source', 'manual')
+
+        try:
+            # Save the brush
+            brush_id = brush_manager.save_brush(
+                self.brush,
+                name=name,
+                brush_type=brush_type,
+                source=source
+            )
+
+            await self.send_message({
+                'type': 'brush_saved',
+                'brush_id': brush_id,
+                'name': name
+            })
+
+            # Send updated brush list
+            await self._handle_list_brushes()
+
+        except Exception as e:
+            await self.send_error(f"Failed to save brush: {str(e)}")
+
+    async def _handle_load_brush(self, data: dict):
+        """Load brush from library"""
+        from backend.core.brush_manager import get_brush_manager
+
+        brush_id = data.get('brush_id')
+        if not brush_id:
+            await self.send_error("No brush_id provided")
+            return
+
+        brush_manager = get_brush_manager()
+
+        try:
+            # Load the brush
+            brush = brush_manager.load_brush(brush_id)
+            if brush is None:
+                await self.send_error(f"Brush {brush_id} not found")
+                return
+
+            # Set as current brush
+            self.brush = brush
+
+            # Recreate painter with new brush
+            self.current_painter = StrokePainter(self.brush, self.scene_gaussians)
+
+            # Get brush info
+            brush_info = brush_manager.get_brush_info(brush_id)
+
+            await self.send_message({
+                'type': 'brush_loaded',
+                'brush_id': brush_id,
+                'brush_info': brush_info
+            })
+
+            # Send a render update
+            await self.send_render()
+
+        except Exception as e:
+            await self.send_error(f"Failed to load brush: {str(e)}")
+
+    async def _handle_list_brushes(self):
+        """List all available brushes"""
+        from backend.core.brush_manager import get_brush_manager
+
+        brush_manager = get_brush_manager()
+
+        try:
+            brushes = brush_manager.list_brushes()
+
+            await self.send_message({
+                'type': 'brush_list',
+                'brushes': brushes
+            })
+
+        except Exception as e:
+            await self.send_error(f"Failed to list brushes: {str(e)}")
+
+    async def _handle_delete_brush(self, data: dict):
+        """Delete brush from library"""
+        from backend.core.brush_manager import get_brush_manager
+
+        brush_id = data.get('brush_id')
+        if not brush_id:
+            await self.send_error("No brush_id provided")
+            return
+
+        brush_manager = get_brush_manager()
+
+        try:
+            # Delete the brush
+            success = brush_manager.delete_brush(brush_id)
+
+            if success:
+                await self.send_message({
+                    'type': 'brush_deleted',
+                    'brush_id': brush_id
+                })
+
+                # Send updated brush list
+                await self._handle_list_brushes()
+            else:
+                await self.send_error(f"Brush {brush_id} not found")
+
+        except Exception as e:
+            await self.send_error(f"Failed to delete brush: {str(e)}")
+
+    async def _handle_update_brush_metadata(self, data: dict):
+        """Update brush metadata (name, tags, etc.)"""
+        from backend.core.brush_manager import get_brush_manager
+
+        brush_id = data.get('brush_id')
+        if not brush_id:
+            await self.send_error("No brush_id provided")
+            return
+
+        brush_manager = get_brush_manager()
+
+        try:
+            # Update metadata
+            updates = {}
+            if 'name' in data:
+                updates['name'] = data['name']
+            if 'tags' in data:
+                updates['tags'] = data['tags']
+
+            success = brush_manager.update_brush_metadata(brush_id, **updates)
+
+            if success:
+                await self.send_message({
+                    'type': 'brush_metadata_updated',
+                    'brush_id': brush_id,
+                    'updates': updates
+                })
+
+                # Send updated brush list
+                await self._handle_list_brushes()
+            else:
+                await self.send_error(f"Brush {brush_id} not found")
+
+        except Exception as e:
+            await self.send_error(f"Failed to update brush metadata: {str(e)}")
 
 
 class ConnectionManager:

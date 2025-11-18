@@ -135,3 +135,30 @@ def quaternion_to_matrix(q: np.ndarray) -> np.ndarray:
         [2*(x*y + w*z), 1 - 2*(x**2 + z**2), 2*(y*z - w*x)],
         [2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x**2 + y**2)]
     ])
+
+
+def quaternion_from_axis_angle(axis: np.ndarray, angle: float) -> np.ndarray:
+    """
+    Create quaternion from axis-angle representation
+
+    Args:
+        axis: Rotation axis (3D vector)
+        angle: Rotation angle in radians
+
+    Returns:
+        Quaternion [x, y, z, w]
+    """
+    # Normalize axis
+    axis = axis / (np.linalg.norm(axis) + 1e-8)
+
+    # Compute quaternion components
+    half_angle = angle / 2.0
+    sin_half = np.sin(half_angle)
+    cos_half = np.cos(half_angle)
+
+    return np.array([
+        axis[0] * sin_half,
+        axis[1] * sin_half,
+        axis[2] * sin_half,
+        cos_half
+    ])

@@ -350,3 +350,185 @@ header h1 {
 #control-panel::-webkit-scrollbar-thumb:hover {
     background: #5a3780;
 }
+
+/* File Upload Styles */
+.file-input-label {
+    display: inline-block;
+    padding: 10px 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: transform 0.2s, box-shadow 0.2s;
+    text-align: center;
+}
+
+.file-input-label:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(118, 75, 162, 0.4);
+}
+
+.upload-preview {
+    margin-top: 15px;
+    padding: 15px;
+    background: #f7f7f7;
+    border-radius: 8px;
+    border: 2px dashed #ddd;
+}
+
+.upload-preview img {
+    max-width: 100%;
+    max-height: 200px;
+    display: block;
+    margin: 0 auto 10px;
+    border-radius: 5px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.preview-info {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #666;
+    margin-top: 10px;
+}
+
+.progress {
+    margin-top: 15px;
+    background: #f0f0f0;
+    border-radius: 10px;
+    overflow: hidden;
+    position: relative;
+    height: 30px;
+}
+
+.progress-bar {
+    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    height: 100%;
+    width: 0%;
+    transition: width 0.3s ease;
+    border-radius: 10px;
+}
+
+.progress-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #333;
+    font-size: 12px;
+    font-weight: 600;
+    z-index: 1;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #5a67d8 0%, #6b4298 100%);
+}
+
+.btn-primary:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* Drag and drop visual feedback */
+.upload-preview.drag-over {
+    border-color: #764ba2;
+    background: #f0f4ff;
+}
+
+/* Notification animations */
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideOut {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+}
+/* Brush Library Styles */
+.brush-library-list {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 8px;
+    margin-bottom: 10px;
+    background: #f9f9f9;
+}
+
+.brush-library-item {
+    padding: 8px;
+    margin: 4px 0;
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.brush-library-item:hover {
+    background: #f0f4ff;
+    border-color: #764ba2;
+}
+
+.brush-library-item.selected {
+    background: #e8ecff;
+    border-color: #667eea;
+    font-weight: 600;
+}
+
+.brush-library-item .brush-name {
+    flex: 1;
+    font-size: 14px;
+}
+
+.brush-library-item .brush-info {
+    font-size: 12px;
+    color: #666;
+    margin-left: 10px;
+}
+
+.brush-library-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.brush-library-controls .btn {
+    flex: 1;
+}
+
+.selected-brush-info {
+    padding: 8px;
+    background: #f0f4ff;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #333;
+}
+
+.selected-brush-info p {
+    margin: 4px 0;
+}

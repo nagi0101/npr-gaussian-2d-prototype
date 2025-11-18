@@ -24,7 +24,12 @@ class BrushStamp:
 
     def __init__(self):
         """Initialize empty brush"""
+        # Working gaussians (with runtime parameters applied)
         self.gaussians: List[Gaussian2D] = []
+
+        # Base pattern (original, immutable)
+        self.base_gaussians: List[Gaussian2D] = []
+
         self.center: np.ndarray = np.zeros(3, dtype=np.float32)
 
         # Orientation frame
@@ -32,9 +37,17 @@ class BrushStamp:
         self.normal: np.ndarray = np.array([0, 0, 1], dtype=np.float32)
         self.binormal: np.ndarray = np.array([0, 1, 0], dtype=np.float32)
 
-        # Brush parameters
-        self.size: float = 1.0
-        self.spacing: float = 0.2  # Arc length spacing between stamps
+        # Runtime parameters (can be changed without modifying pattern)
+        self.current_color: np.ndarray = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+        self.current_size_multiplier: float = 1.0
+        self.current_global_opacity: float = 1.0  # Multiplies pattern opacity
+        self.spacing: float = 0.3  # Arc length spacing between stamps
+
+        # Metadata for brush library
+        self.metadata: dict = {}
+
+        # Bounding box diagonal (spatial extent of brush)
+        self.size: float = 0.1  # Default for empty brush
 
     def create_circular_pattern(
         self,
@@ -42,7 +55,7 @@ class BrushStamp:
         radius: float = 0.5,
         gaussian_scale: float = 0.05,
         opacity: float = 0.8,
-        color: Optional[np.ndarray] = None
+        color: Optional[np.ndarray] = None  # Kept for backward compatibility, ignored
     ):
         """
         Create circular brush pattern
@@ -51,13 +64,14 @@ class BrushStamp:
             num_gaussians: Number of Gaussians in circle
             radius: Circle radius
             gaussian_scale: Individual Gaussian scale
-            opacity: Gaussian opacity
-            color: RGB color (default: gray)
+            opacity: Pattern opacity (can have gradient/variation)
+            color: Ignored (patterns are neutral, color applied at runtime)
         """
-        self.gaussians = []
+        # Clear existing pattern
+        self.base_gaussians = []
 
-        if color is None:
-            color = np.array([0.5, 0.5, 0.5])
+        # Use neutral gray for pattern
+        neutral_color = np.array([0.5, 0.5, 0.5])
 
         for i in range(num_gaussians):
             angle = 2 * np.pi * i / num_gaussians
@@ -69,11 +83,17 @@ class BrushStamp:
                 scale=np.array([gaussian_scale, gaussian_scale, 1e-4]),
                 rotation=np.array([0, 0, 0, 1]),
                 opacity=opacity,
-                color=color.copy()
+                color=neutral_color.copy()
             )
-            self.gaussians.append(g)
+            self.base_gaussians.append(g)
 
         self._update_center()
+
+        # Compute size from bounding box
+        self.size = self._compute_size()
+
+        # Apply default parameters to create working gaussians
+        self.apply_parameters()
 
     def create_line_pattern(
         self,
@@ -81,7 +101,7 @@ class BrushStamp:
         length: float = 1.0,
         thickness: float = 0.05,
         opacity: float = 0.8,
-        color: Optional[np.ndarray] = None
+        color: Optional[np.ndarray] = None  # Kept for backward compatibility, ignored
     ):
         """
         Create line brush pattern (for stroke-like brushes)
@@ -90,13 +110,14 @@ class BrushStamp:
             num_gaussians: Number of Gaussians
             length: Line length
             thickness: Gaussian thickness
-            opacity: Gaussian opacity
-            color: RGB color
+            opacity: Pattern opacity (can have gradient/variation)
+            color: Ignored (patterns are neutral, color applied at runtime)
         """
-        self.gaussians = []
+        # Clear existing pattern
+        self.base_gaussians = []
 
-        if color is None:
-            color = np.array([0.5, 0.5, 0.5])
+        # Use neutral gray for pattern
+        neutral_color = np.array([0.5, 0.5, 0.5])
 
         for i in range(num_gaussians):
             # Distribute along line
@@ -108,11 +129,17 @@ class BrushStamp:
                 scale=np.array([thickness, thickness, 1e-4]),
                 rotation=np.array([0, 0, 0, 1]),
                 opacity=opacity,
-                color=color.copy()
+                color=neutral_color.copy()
             )
-            self.gaussians.append(g)
+            self.base_gaussians.append(g)
 
         self._update_center()
+
+        # Compute size from bounding box
+        self.size = self._compute_size()
+
+        # Apply default parameters to create working gaussians
+        self.apply_parameters()
 
     def create_grid_pattern(
         self,
@@ -120,7 +147,7 @@ class BrushStamp:
         spacing: float = 0.1,
         gaussian_scale: float = 0.04,
         opacity: float = 0.8,
-        color: Optional[np.ndarray] = None
+        color: Optional[np.ndarray] = None  # Kept for backward compatibility, ignored
     ):
         """
         Create grid brush pattern
@@ -129,13 +156,14 @@ class BrushStamp:
             grid_size: NxN grid size
             spacing: Spacing between Gaussians
             gaussian_scale: Individual Gaussian scale
-            opacity: Gaussian opacity
-            color: RGB color
+            opacity: Pattern opacity (can have gradient/variation)
+            color: Ignored (patterns are neutral, color applied at runtime)
         """
-        self.gaussians = []
+        # Clear existing pattern
+        self.base_gaussians = []
 
-        if color is None:
-            color = np.array([0.5, 0.5, 0.5])
+        # Use neutral gray for pattern
+        neutral_color = np.array([0.5, 0.5, 0.5])
 
         for i in range(grid_size):
             for j in range(grid_size):
@@ -147,19 +175,28 @@ class BrushStamp:
                     scale=np.array([gaussian_scale, gaussian_scale, 1e-4]),
                     rotation=np.array([0, 0, 0, 1]),
                     opacity=opacity,
-                    color=color.copy()
+                    color=neutral_color.copy()
                 )
-                self.gaussians.append(g)
+                self.base_gaussians.append(g)
 
         self._update_center()
 
+        # Compute size from bounding box
+        self.size = self._compute_size()
+
+        # Apply default parameters to create working gaussians
+        self.apply_parameters()
+
     def _update_center(self):
         """Update brush center as mean of Gaussian positions"""
-        if len(self.gaussians) == 0:
+        # Use base_gaussians if available, otherwise use working gaussians
+        source_gaussians = self.base_gaussians if self.base_gaussians else self.gaussians
+
+        if len(source_gaussians) == 0:
             self.center = np.zeros(3, dtype=np.float32)
             return
 
-        positions = np.array([g.position for g in self.gaussians])
+        positions = np.array([g.position for g in source_gaussians])
         self.center = np.mean(positions, axis=0)
 
     def place_at(
@@ -214,19 +251,62 @@ class BrushStamp:
         return placed_gaussians
 
     def add_gaussian(self, gaussian: Gaussian2D):
-        """Add a Gaussian to the brush"""
-        self.gaussians.append(gaussian)
+        """Add a Gaussian to the brush pattern"""
+        # Add to base pattern
+        self.base_gaussians.append(gaussian)
         self._update_center()
+        # Recreate working gaussians with current parameters
+        self.apply_parameters()
+
+    def apply_parameters(self, color: Optional[np.ndarray] = None,
+                         size_multiplier: Optional[float] = None,
+                         global_opacity: Optional[float] = None,
+                         spacing: Optional[float] = None):
+        """
+        Apply runtime parameters to base pattern.
+        Creates working gaussians from base pattern with parameters applied.
+
+        Args:
+            color: RGB color to apply (None keeps current)
+            size_multiplier: Scale multiplier (None keeps current)
+            global_opacity: Global opacity multiplier (None keeps current)
+            spacing: Stamp spacing (None keeps current)
+        """
+        # Update current parameters if provided
+        if color is not None:
+            self.current_color = np.array(color, dtype=np.float32)
+        if size_multiplier is not None:
+            self.current_size_multiplier = size_multiplier
+        if global_opacity is not None:
+            self.current_global_opacity = global_opacity
+        if spacing is not None:
+            self.spacing = spacing
+
+        # Apply parameters to create working gaussians
+        self.gaussians = []
+        for base_g in self.base_gaussians:
+            g = base_g.copy()
+
+            # Apply color with luminance-preserving tinting
+            # base_g.color stores grayscale luminance pattern [lum, lum, lum]
+            # Extract luminance (since R=G=B in grayscale, just use first channel)
+            pattern_luminance = base_g.color[0]
+            # Tint: runtime color × pattern luminance (preserves texture brightness variations)
+            g.color = self.current_color * pattern_luminance
+
+            # Apply size multiplier
+            g.scale = base_g.scale * self.current_size_multiplier
+            # Apply global opacity (multiply with pattern opacity)
+            g.opacity = base_g.opacity * self.current_global_opacity
+            self.gaussians.append(g)
 
     def set_color(self, color: np.ndarray):
-        """Set color for all Gaussians"""
-        for g in self.gaussians:
-            g.color = color.copy()
+        """Set color for all Gaussians (legacy method, uses apply_parameters)"""
+        self.apply_parameters(color=color)
 
     def set_opacity(self, opacity: float):
-        """Set opacity for all Gaussians"""
-        for g in self.gaussians:
-            g.opacity = opacity
+        """Set global opacity multiplier (legacy method, uses apply_parameters)"""
+        self.apply_parameters(global_opacity=opacity)
 
     def get_bounds(self) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -241,16 +321,36 @@ class BrushStamp:
         positions = np.array([g.position for g in self.gaussians])
         return positions.min(axis=0), positions.max(axis=0)
 
+    def _compute_size(self) -> float:
+        """
+        Compute bounding box diagonal from current base_gaussians
+
+        Returns:
+            Diagonal length of bounding box (0.1 if empty)
+        """
+        if len(self.base_gaussians) == 0:
+            return 0.1
+
+        positions = np.array([g.position for g in self.base_gaussians])
+        min_pos = np.min(positions, axis=0)
+        max_pos = np.max(positions, axis=0)
+        return float(np.linalg.norm(max_pos - min_pos))
+
     def copy(self) -> 'BrushStamp':
         """Deep copy of brush"""
         brush_copy = BrushStamp()
         brush_copy.gaussians = [g.copy() for g in self.gaussians]
+        brush_copy.base_gaussians = [g.copy() for g in self.base_gaussians]
         brush_copy.center = self.center.copy()
         brush_copy.tangent = self.tangent.copy()
         brush_copy.normal = self.normal.copy()
         brush_copy.binormal = self.binormal.copy()
-        brush_copy.size = self.size
+        brush_copy.current_color = self.current_color.copy()
+        brush_copy.current_size_multiplier = self.current_size_multiplier
+        brush_copy.current_global_opacity = self.current_global_opacity
         brush_copy.spacing = self.spacing
+        brush_copy.metadata = self.metadata.copy()
+        brush_copy.size = self.size
         return brush_copy
 
     def __len__(self) -> int:
@@ -258,6 +358,17 @@ class BrushStamp:
 
     def __repr__(self) -> str:
         return f"BrushStamp(gaussians={len(self.gaussians)}, spacing={self.spacing})"
+
+    def to_dict(self) -> dict:
+        """Convert brush to dictionary for serialization"""
+        from .brush_manager import BrushSerializer
+        return BrushSerializer.brush_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'BrushStamp':
+        """Create brush from dictionary"""
+        from .brush_manager import BrushSerializer
+        return BrushSerializer.dict_to_brush(data)
 
 
 class StrokePainter:

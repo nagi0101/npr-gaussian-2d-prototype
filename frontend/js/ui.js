@@ -23,6 +23,13 @@ class UIController {
         this.brushOpacityValue = document.getElementById('brushOpacityValue');
         this.brushColor = document.getElementById('brushColor');
 
+        // Brush Library
+        this.brushLibraryList = document.getElementById('brushLibraryList');
+        this.refreshBrushesBtn = document.getElementById('refreshBrushesBtn');
+        this.deleteBrushBtn = document.getElementById('deleteBrushBtn');
+        this.selectedBrushInfo = document.getElementById('selectedBrushInfo');
+        this.selectedBrushId = null;
+
         // Buttons
         this.createBrushBtn = document.getElementById('createBrushBtn');
         this.applyBrushBtn = document.getElementById('applyBrushBtn');
@@ -125,6 +132,15 @@ class UIController {
         this.applyDebugBtn.addEventListener('click', () => {
             this.handleApplyDebugSettings();
         });
+
+        // Brush Library buttons
+        this.refreshBrushesBtn.addEventListener('click', () => {
+            this.refreshBrushList();
+        });
+
+        this.deleteBrushBtn.addEventListener('click', () => {
+            this.handleDeleteBrush();
+        });
     }
 
     handleCreateBrush() {
@@ -139,6 +155,7 @@ class UIController {
 
     handleApplyBrushParams() {
         const params = {
+            size: parseFloat(this.brushSize.value),  // Add size parameter
             spacing: parseFloat(this.brushSpacing.value),
             opacity: parseFloat(this.brushOpacity.value),
             color: this.hexToRgb(this.brushColor.value)
@@ -238,6 +255,104 @@ class UIController {
     hideLoading() {
         this.loadingIndicator.classList.add('hidden');
     }
+
+    // Brush Library Methods
+    refreshBrushList() {
+        console.log('[UI] Requesting brush list from server');
+        this.client.requestBrushList();
+    }
+
+    updateBrushList(brushes) {
+        console.log(`[UI] Updating brush list with ${brushes.length} brushes`);
+
+        // Clear current list
+        this.brushLibraryList.innerHTML = '';
+
+        if (brushes.length === 0) {
+            this.brushLibraryList.innerHTML = '<div class="brush-library-item">No brushes available</div>';
+            return;
+        }
+
+        // Add brush items
+        brushes.forEach(brush => {
+            const brushItem = document.createElement('div');
+            brushItem.className = 'brush-library-item';
+            brushItem.dataset.brushId = brush.id;
+
+            // Build info text
+            const info = `${brush.gaussian_count} gaussians`;
+
+            brushItem.innerHTML = `
+                <span class="brush-name">${brush.name || 'Unnamed'}</span>
+                <span class="brush-info">${info}</span>
+            `;
+
+            // Add click handler
+            brushItem.addEventListener('click', () => {
+                this.selectBrush(brush.id);
+            });
+
+            this.brushLibraryList.appendChild(brushItem);
+        });
+
+        // Select first brush if none selected
+        if (!this.selectedBrushId && brushes.length > 0) {
+            this.selectBrush(brushes[0].id);
+        }
+    }
+
+    selectBrush(brushId) {
+        console.log('[UI] Selecting brush:', brushId);
+
+        // Update selected state in UI
+        const items = this.brushLibraryList.querySelectorAll('.brush-library-item');
+        items.forEach(item => {
+            if (item.dataset.brushId === brushId) {
+                item.classList.add('selected');
+            } else {
+                item.classList.remove('selected');
+            }
+        });
+
+        this.selectedBrushId = brushId;
+        this.deleteBrushBtn.disabled = false;
+
+        // Load the selected brush
+        this.client.loadBrush(brushId);
+    }
+
+    handleDeleteBrush() {
+        if (!this.selectedBrushId) {
+            return;
+        }
+
+        if (confirm('Delete this brush?')) {
+            console.log('[UI] Deleting brush:', this.selectedBrushId);
+            this.client.deleteBrush(this.selectedBrushId);
+            this.selectedBrushId = null;
+            this.deleteBrushBtn.disabled = true;
+        }
+    }
+
+    updateSelectedBrushInfo(brushData) {
+        if (!this.selectedBrushInfo) {
+            return;
+        }
+
+        if (!brushData) {
+            this.selectedBrushInfo.innerHTML = '<p>No brush selected</p>';
+            return;
+        }
+
+        const info = `
+            <p><strong>${brushData.name || 'Unnamed Brush'}</strong></p>
+            <p>Type: ${brushData.type || 'unknown'}</p>
+            <p>Source: ${brushData.source || 'unknown'}</p>
+            <p>Gaussians: ${brushData.gaussian_count || 0}</p>
+        `;
+
+        this.selectedBrushInfo.innerHTML = info;
+    }
 }
 
 // Initialize everything when page loads
@@ -293,6 +408,60 @@ window.addEventListener('DOMContentLoaded', () => {
             alert('Error: ' + message);
         };
 
+        // Setup brush library callbacks
+        client.onBrushListReceived = (brushes) => {
+            console.log('[App] ✓ Brush list received:', brushes.length, 'brushes');
+            uiController.updateBrushList(brushes);
+        };
+
+        client.onBrushLoaded = (data) => {
+            console.log('[App] ✓ Brush loaded:', data.brush_id);
+            uiController.updateSelectedBrushInfo(data);
+        };
+
+        client.onBrushDeleted = (brushId) => {
+            console.log('[App] ✓ Brush deleted:', brushId);
+            if (uiController.selectedBrushId === brushId) {
+                uiController.selectedBrushId = null;
+                uiController.deleteBrushBtn.disabled = true;
+                uiController.updateSelectedBrushInfo(null);
+            }
+        };
+
+        // Setup brush created callback
+        client.onBrushCreated = (data) => {
+            console.log('[App] ✓ Brush created successfully');
+            // Refresh brush list after new brush is created
+            client.requestBrushList();
+            // Show success notification
+            const notification = document.createElement('div');
+            notification.className = 'notification success';
+            notification.textContent = `✓ Brush created: ${data.pattern || 'custom'} (${data.num_gaussians || 0} Gaussians)`;
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: #4CAF50;
+                color: white;
+                padding: 12px 20px;
+                border-radius: 4px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                z-index: 1000;
+                animation: slideIn 0.3s ease-out;
+            `;
+            document.body.appendChild(notification);
+
+            // Remove notification after 3 seconds
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease-out';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        };
+
+        // Request initial brush list
+        console.log('[App] Step 6: Requesting brush list');
+        client.requestBrushList();
+
         uiController.hideLoading();
         console.log('[App] ========================================');
         console.log('[App] ✓ Application ready for painting!');
@@ -308,6 +477,24 @@ window.addEventListener('DOMContentLoaded', () => {
     // Initialize UI controller
     console.log('[App] Step 6: Initializing UI controller');
     const uiController = new UIController(client, null);
+
+    // Initialize brush upload handler
+    console.log('[App] Step 7: Initializing brush upload handler');
+    const uploadHandler = new BrushUploadHandler(client);
+
+    // Initialize brush preview
+    console.log('[App] Step 8: Initializing brush preview');
+    const brushPreview = new BrushPreview();
+
+    // Connect brush preview to conversion complete callback
+    client.onConversionComplete = (data) => {
+        console.log('[App] ✓ Conversion complete, updating brush preview');
+        if (data.brush_data) {
+            brushPreview.updatePreview(data.brush_data);
+        }
+        // Refresh brush list after conversion
+        client.requestBrushList();
+    };
 
     uiController.showLoading();
 

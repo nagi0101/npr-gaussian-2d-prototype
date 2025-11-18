@@ -31,6 +31,24 @@
             <aside id="control-panel">
                 <h2>Controls</h2>
 
+                <!-- Brush Library -->
+                <section class="control-section">
+                    <h3>Brush Library</h3>
+
+                    <div id="brushLibraryContainer">
+                        <div id="brushLibraryList" class="brush-library-list">
+                            <!-- Brushes will be populated here -->
+                        </div>
+                        <div class="brush-library-controls">
+                            <button id="refreshBrushesBtn" class="btn btn-small">Refresh</button>
+                            <button id="deleteBrushBtn" class="btn btn-small btn-danger" disabled>Delete</button>
+                        </div>
+                        <div id="selectedBrushInfo" class="selected-brush-info">
+                            <p>No brush selected</p>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- Brush Settings -->
                 <section class="control-section">
                     <h3>Brush Settings</h3>
@@ -51,8 +69,8 @@
                     </div>
 
                     <div class="control-group">
-                        <label for="brushSpacing">Spacing: <span id="brushSpacingValue">0.1</span></label>
-                        <input type="range" id="brushSpacing" min="0.05" max="0.5" step="0.05" value="0.1">
+                        <label for="brushSpacing">Spacing: <span id="brushSpacingValue">0.3</span></label>
+                        <input type="range" id="brushSpacing" min="0.1" max="0.5" step="0.05" value="0.3">
                     </div>
 
                     <div class="control-group">
@@ -66,6 +84,48 @@
                     </div>
 
                     <button id="applyBrushBtn" class="btn">Apply Settings</button>
+                </section>
+
+                <!-- Brush Upload -->
+                <section class="control-section">
+                    <h3>Upload Brush Image</h3>
+
+                    <div class="control-group">
+                        <label for="brushImageUpload" class="file-input-label">
+                            Choose Image File
+                            <input type="file" id="brushImageUpload" accept="image/*" style="display: none;">
+                        </label>
+                        <p class="help-text">PNG, JPG, or BMP (max 2048x2048)</p>
+                    </div>
+
+                    <div id="uploadPreview" class="upload-preview hidden">
+                        <img id="previewImage" alt="Brush preview">
+                        <div class="preview-info">
+                            <span id="previewFilename"></span>
+                            <span id="previewDimensions"></span>
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="depthProfile">Depth Profile:</label>
+                        <select id="depthProfile">
+                            <option value="convex" selected>Convex (bulge out)</option>
+                            <option value="concave">Concave (indent in)</option>
+                            <option value="flat">Flat (minimal depth)</option>
+                            <option value="wavy">Wavy (sinusoidal)</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="depthScale">Depth Scale: <span id="depthScaleValue">0.2</span></label>
+                        <input type="range" id="depthScale" min="0.1" max="1.0" step="0.1" value="0.2">
+                    </div>
+
+                    <button id="convertBrushBtn" class="btn btn-primary" disabled>Convert to 3DGS Brush</button>
+                    <div id="conversionProgress" class="progress hidden">
+                        <div class="progress-bar"></div>
+                        <span class="progress-text">Converting...</span>
+                    </div>
                 </section>
 
                 <!-- Phase 3 Features -->
@@ -192,6 +252,8 @@
     <!-- Scripts -->
     <script src="/static/js/websocket_client.js"></script>
     <script src="/static/js/canvas.js"></script>
+    <script src="/static/js/brush_preview.js"></script>
+    <script src="/static/js/brush_upload.js"></script>
     <script src="/static/js/ui.js"></script>
 </body>
 </html>

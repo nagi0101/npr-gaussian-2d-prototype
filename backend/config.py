@@ -21,7 +21,7 @@ class Config:
     WORLD_MAX: tuple = (2.0, 2.0)
 
     # Brush settings
-    DEFAULT_BRUSH_SPACING: float = 0.1
+    DEFAULT_BRUSH_SPACING: float = 0.3  # Increased from 0.1 to reduce Gaussian density
     DEFAULT_BRUSH_SIZE: float = 1.0
     DEFAULT_GAUSSIAN_OPACITY: float = 0.8
 

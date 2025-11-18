@@ -39,8 +39,27 @@ else
 fi
 
 echo ""
+echo "======================================"
+echo "  Setting CUDA Environment Variables"
+echo "======================================"
+
+# Set CUDA environment variables in conda environment
+echo "Configuring CUDA_HOME and LD_LIBRARY_PATH..."
+conda env config vars set CUDA_HOME=/usr/local/cuda-12.3 -n ${ENV_NAME}
+conda env config vars set LD_LIBRARY_PATH=/usr/local/cuda-12.3/lib64:\$LD_LIBRARY_PATH -n ${ENV_NAME}
+
+echo "✓ CUDA environment variables configured"
+echo "  CUDA_HOME=/usr/local/cuda-12.3"
+echo "  LD_LIBRARY_PATH=/usr/local/cuda-12.3/lib64:\$LD_LIBRARY_PATH"
+
+echo ""
 echo "Activating environment..."
 eval "$(conda shell.bash hook)"
+conda activate ${ENV_NAME}
+
+echo ""
+echo "Reactivating environment to apply CUDA variables..."
+conda deactivate
 conda activate ${ENV_NAME}
 
 echo ""

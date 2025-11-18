@@ -13,6 +13,7 @@ import uuid
 import os
 
 from backend.api.websocket import manager
+from backend.api.upload import router as upload_router
 from backend.config import config
 
 # Create FastAPI app
@@ -30,6 +31,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include upload router
+app.include_router(upload_router)
 
 # Mount static files (frontend)
 frontend_dir = os.path.join(os.path.dirname(__file__), "..", "frontend")
@@ -82,7 +86,15 @@ async def websocket_endpoint(websocket: WebSocket):
     # Connect
     session = await manager.connect(websocket, session_id)
 
-    # Send initial message
+    # Initialize brush library with default brushes
+    from backend.core.brush_manager import get_brush_manager
+    brush_manager = get_brush_manager()
+    brush_manager.create_default_brushes()
+
+    # Get initial brush list
+    brushes = brush_manager.list_brushes()
+
+    # Send initial message with brush list
     await session.send_message({
         'type': 'connected',
         'session_id': session_id,
@@ -91,7 +103,8 @@ async def websocket_endpoint(websocket: WebSocket):
             'height': config.RENDER_HEIGHT,
             'world_min': config.WORLD_MIN,
             'world_max': config.WORLD_MAX
-        }
+        },
+        'brushes': brushes
     })
 
     # Send initial render (empty scene)

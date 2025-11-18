@@ -18,6 +18,10 @@ class GaussianPaintClient {
         this.onRenderUpdate = null;
         this.onStatsUpdate = null;
         this.onError = null;
+        this.onBrushCreated = null;
+        this.onBrushListReceived = null;
+        this.onBrushLoaded = null;
+        this.onBrushDeleted = null;
 
         // State
         this.isDrawing = false;
@@ -115,6 +119,11 @@ class GaussianPaintClient {
 
                 case 'brush_created':
                     console.log('[Message] ✓ Brush created:', data.pattern);
+                    if (this.onBrushCreated) {
+                        this.onBrushCreated(data);
+                    }
+                    // Request a render to show the brush
+                    this.requestRender();
                     break;
 
                 case 'scene_cleared':
@@ -131,6 +140,50 @@ class GaussianPaintClient {
 
                 case 'debug_options_updated':
                     console.log('[Message] ✓ Debug options updated:', data.options);
+                    break;
+
+                case 'conversion_progress':
+                    console.log('[Message] Conversion progress:', data.progress + '%', data.status);
+                    if (this.onConversionProgress) {
+                        this.onConversionProgress(data);
+                    }
+                    break;
+
+                case 'conversion_complete':
+                    console.log('[Message] ✓ Conversion complete:', data.brush_name);
+                    if (this.onConversionComplete) {
+                        this.onConversionComplete(data);
+                    }
+                    break;
+
+                case 'conversion_failed':
+                    console.error('[Message] ✗ Conversion failed:', data.error);
+                    if (this.onConversionFailed) {
+                        this.onConversionFailed(data);
+                    }
+                    break;
+
+                case 'brush_list':
+                    console.log('[Message] ✓ Brush list received:', data.brushes?.length || 0, 'brushes');
+                    if (this.onBrushListReceived) {
+                        this.onBrushListReceived(data.brushes || []);
+                    }
+                    break;
+
+                case 'brush_loaded':
+                    console.log('[Message] ✓ Brush loaded:', data.brush_id);
+                    if (this.onBrushLoaded) {
+                        this.onBrushLoaded(data);
+                    }
+                    break;
+
+                case 'brush_deleted':
+                    console.log('[Message] ✓ Brush deleted:', data.brush_id);
+                    if (this.onBrushDeleted) {
+                        this.onBrushDeleted(data.brush_id);
+                    }
+                    // Request updated brush list
+                    this.requestBrushList();
                     break;
 
                 default:
@@ -166,6 +219,11 @@ class GaussianPaintClient {
         } catch (error) {
             console.error('Error sending message:', error);
         }
+    }
+
+    // Alias for send() to support BrushUploadHandler
+    sendMessage(data) {
+        this.send(data);
     }
 
     // Painting actions
@@ -247,6 +305,29 @@ class GaussianPaintClient {
         this.send({
             type: 'set_debug_options',
             options: options
+        });
+    }
+
+    // Brush Library Methods
+    requestBrushList() {
+        this.send({
+            type: 'list_brushes'
+        });
+    }
+
+    loadBrush(brushId) {
+        console.log('[Brush] Loading brush:', brushId);
+        this.send({
+            type: 'load_brush',
+            brush_id: brushId
+        });
+    }
+
+    deleteBrush(brushId) {
+        console.log('[Brush] Deleting brush:', brushId);
+        this.send({
+            type: 'delete_brush',
+            brush_id: brushId
         });
     }
 
