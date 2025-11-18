@@ -162,3 +162,22 @@ def quaternion_from_axis_angle(axis: np.ndarray, angle: float) -> np.ndarray:
         axis[2] * sin_half,
         cos_half
     ])
+
+
+# Alias for consistency with brush.py imports
+matrix_to_quaternion = quaternion_from_matrix
+
+
+def quaternion_multiply_batch(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
+    """
+    Multiply two quaternions (batch-friendly version)
+
+    Args:
+        q1: First quaternion [x, y, z, w]
+        q2: Second quaternion [x, y, z, w]
+
+    Returns:
+        Product quaternion q1 * q2
+    """
+    # Same as quaternion_multiply, just a batch-friendly alias
+    return quaternion_multiply(q1, q2)
