@@ -235,10 +235,12 @@ class BrushConverter:
             alpha_variance = np.var(alpha_channel)
 
             if alpha_variance > 0.01:
-                # Meaningful alpha with variation - use it
+                # Meaningful alpha with variation - use it but make it binary
                 alpha = alpha_channel
+                # Make alpha strictly binary (0 or 1) to avoid semi-transparent backgrounds
+                alpha = (alpha > 0.5).astype(np.float32)
                 use_rgb_extraction = False
-                logger.info(f"[AlphaMask] Using existing alpha channel (variance={alpha_variance:.4f})")
+                logger.info(f"[AlphaMask] Using existing alpha channel (variance={alpha_variance:.4f}), binarized at 0.5")
             else:
                 # Alpha is uniform (e.g., all 255) - ignore and extract from RGB
                 logger.info(f"[AlphaMask] Ignoring uniform alpha channel (variance={alpha_variance:.4f}), extracting from RGB")
@@ -274,19 +276,39 @@ class BrushConverter:
                 threshold_value, alpha = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                 logger.info(f"[AlphaMask] Using THRESH_BINARY + OTSU (dark background), threshold={threshold_value:.1f}")
 
-            alpha = alpha.astype(np.float32) / 255.0
+            # Apply morphological operations to clean the mask
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            # Remove small noise pixels in background
+            alpha = cv2.morphologyEx(alpha, cv2.MORPH_OPEN, kernel)
+            # Fill small holes in strokes
+            alpha = cv2.morphologyEx(alpha, cv2.MORPH_CLOSE, kernel)
 
-            # Store alpha before blur for debugging
+            # Make it strictly binary after morphological operations
+            alpha = (alpha > 127).astype(np.uint8) * 255
+
+            # Store alpha for debugging
             if self.debug_enabled:
-                self.debug_data['alpha_before_blur'] = alpha.copy()
-                logger.info(f"[AlphaMask] Alpha stats before blur - Min: {np.min(alpha):.3f}, Max: {np.max(alpha):.3f}, Mean: {np.mean(alpha):.3f}")
+                self.debug_data['alpha_before_binary'] = alpha.copy()
+                logger.info(f"[AlphaMask] Alpha stats before final binarization - Min: {np.min(alpha):.3f}, Max: {np.max(alpha):.3f}, Mean: {np.mean(alpha):.3f}")
 
-        # DISABLE GaussianBlur - it destroys the binary mask by averaging everything
-        # For small brush images, even a 3x3 kernel can blur away the entire structure
-        # alpha = cv2.GaussianBlur(alpha, (3, 3), 0.5)
+            # Final conversion to float and strict binarization
+            alpha = alpha.astype(np.float32) / 255.0
+            alpha = (alpha > 0.5).astype(np.float32)  # Ensure strictly 0 or 1
 
-        if self.debug_enabled and 'alpha_before_blur' in self.debug_data:
-            logger.info(f"[AlphaMask] Alpha stats after blur disabled - Min: {np.min(alpha):.3f}, Max: {np.max(alpha):.3f}, Mean: {np.mean(alpha):.3f}")
+        # Apply morphological cleaning for both alpha channel and RGB extraction
+        if use_rgb_extraction or True:  # Always apply cleaning
+            kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            # Convert to uint8 for morphological operations
+            alpha_uint8 = (alpha * 255).astype(np.uint8)
+            # Clean up the mask
+            alpha_uint8 = cv2.morphologyEx(alpha_uint8, cv2.MORPH_OPEN, kernel_small)
+            alpha_uint8 = cv2.morphologyEx(alpha_uint8, cv2.MORPH_CLOSE, kernel_small)
+            # Convert back to float and ensure binary
+            alpha = (alpha_uint8 > 127).astype(np.float32)
+
+        if self.debug_enabled:
+            logger.info(f"[AlphaMask] Final alpha stats - Min: {np.min(alpha):.3f}, Max: {np.max(alpha):.3f}, Mean: {np.mean(alpha):.3f}")
+            logger.info(f"[AlphaMask] Unique values: {np.unique(alpha)}")
 
         return alpha
 
@@ -295,7 +317,7 @@ class BrushConverter:
         image: np.ndarray,
         depth_map: np.ndarray,
         alpha_mask: np.ndarray,
-        alpha_threshold: float = 0.3,  # Increased to 0.3 to filter semi-transparent gray pixels
+        alpha_threshold: float = 0.8,  # Increased to 0.8 to strictly filter background pixels
         features: Dict[str, np.ndarray] = None,  # Added for importance-based sampling
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -1320,11 +1342,22 @@ class BrushConverter:
 
             logger.info("[Optimization] Attempting PyTorch autograd optimizer (GPU-accelerated)")
 
-            # Create PyTorch optimizer
+            # Extract alpha mask for loss computation
+            if target_image.shape[-1] == 4:
+                # Use alpha channel if available
+                target_alpha_mask = target_image[:, :, 3] / 255.0 if target_image.max() > 1.0 else target_image[:, :, 3]
+                target_alpha_mask = (target_alpha_mask > 0.5).astype(np.float32)
+            else:
+                # Create mask from non-background pixels (works for both white and black backgrounds)
+                target_gray = cv2.cvtColor(target_rgb.astype(np.uint8) if target_rgb.max() <= 1.0 else (target_rgb / 255.0 * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                target_alpha_mask = cv2.threshold(target_gray, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1].astype(np.float32)
+
+            # Create PyTorch optimizer with alpha mask
             torch_optimizer = TorchGaussianOptimizer(
                 gaussians=gaussians,
                 target_image=target_rgb if target_rgb.max() <= 1.0 else target_rgb / 255.0,
-                renderer=renderer
+                renderer=renderer,
+                alpha_mask=target_alpha_mask
             )
 
             # Progress callback wrapper for PyTorch optimizer
