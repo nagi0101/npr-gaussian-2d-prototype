@@ -68,6 +68,11 @@ class PaintingSession:
         # Phase 3 feature flags
         self.enable_deformation = config.ENABLE_DEFORMATION
         self.enable_inpainting = config.ENABLE_INPAINTING
+        self.blend_strength = config.INPAINT_BLEND_STRENGTH
+        self.global_inpainting = config.INPAINT_GLOBAL_MODE
+        self.blend_mode = config.INPAINT_BLEND_MODE
+        self.color_blending = config.INPAINT_COLOR_BLENDING
+        self.use_anisotropic = config.INPAINT_ANISOTROPIC
 
         # Render throttling for performance (prevent sending every frame)
         self.last_render_time = 0.0  # ms
@@ -210,7 +215,11 @@ class PaintingSession:
             None,
             self.current_painter.finish_stroke,
             self.enable_deformation,
-            self.enable_inpainting
+            self.enable_inpainting,
+            self.blend_strength,
+            self.global_inpainting,
+            self.blend_mode,
+            self.color_blending
         )
 
         # Send final high-quality render (no throttling)
@@ -354,11 +363,33 @@ class PaintingSession:
             self.enable_inpainting = bool(data['enable_inpainting'])
             print(f"[Session {self.session_id}] ✓ Inpainting: {'ON' if self.enable_inpainting else 'OFF'}")
 
+        if 'blend_strength' in data:
+            self.blend_strength = float(data['blend_strength'])
+            self.blend_strength = max(0.0, min(1.0, self.blend_strength))  # Clamp [0, 1]
+            print(f"[Session {self.session_id}] ✓ Blend strength: {self.blend_strength:.2f}")
+
+        if 'global_inpainting' in data:
+            self.global_inpainting = bool(data['global_inpainting'])
+            print(f"[Session {self.session_id}] ✓ Global inpainting: {'ON' if self.global_inpainting else 'OFF'}")
+
+        if 'blend_mode' in data:
+            if data['blend_mode'] in ['linear', 'smoothstep', 'gaussian']:
+                self.blend_mode = data['blend_mode']
+                print(f"[Session {self.session_id}] ✓ Blend mode: {self.blend_mode}")
+
+        if 'color_blending' in data:
+            self.color_blending = bool(data['color_blending'])
+            print(f"[Session {self.session_id}] ✓ Color blending: {'ON' if self.color_blending else 'OFF'}")
+
         await self.send_message({
             'type': 'feature_flags_updated',
             'flags': {
                 'enable_deformation': self.enable_deformation,
-                'enable_inpainting': self.enable_inpainting
+                'enable_inpainting': self.enable_inpainting,
+                'blend_strength': self.blend_strength,
+                'global_inpainting': self.global_inpainting,
+                'blend_mode': self.blend_mode,
+                'color_blending': self.color_blending
             }
         })
 
@@ -487,7 +518,7 @@ class PaintingSession:
                 brush_name,
                 depth_profile,
                 depth_scale,
-                0  # No optimization for now
+                20  # No optimization for now
             )
 
             # Update progress

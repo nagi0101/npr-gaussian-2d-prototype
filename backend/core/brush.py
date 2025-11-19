@@ -712,7 +712,10 @@ class StrokePainter:
         # Update last stamp position
         self.last_stamp_arc_length = arc_length - spacing
 
-    def finish_stroke(self, enable_deformation: bool = False, enable_inpainting: bool = False):
+    def finish_stroke(self, enable_deformation: bool = False, enable_inpainting: bool = False,
+                     blend_strength: float = 0.3, global_inpainting: bool = False,
+                     blend_mode: str = 'linear', color_blending: bool = False,
+                     use_anisotropic: bool = False):
         """
         Finish current stroke
 
@@ -721,6 +724,11 @@ class StrokePainter:
         Args:
             enable_deformation: Apply non-rigid deformation
             enable_inpainting: Apply overlap inpainting
+            blend_strength: Opacity reduction strength for inpainting (0.0-1.0)
+            global_inpainting: Blend all overlapping pairs (not just consecutive)
+            blend_mode: Blending falloff mode ('linear', 'smoothstep', 'gaussian')
+            color_blending: Whether to blend colors as well as opacity
+            use_anisotropic: Whether to use anisotropic (elliptical) distance
         """
         if self.current_stroke is None:
             return
@@ -807,48 +815,46 @@ class StrokePainter:
 
                     deformed_stamps.append(deformed)
 
-            # Add deformed Gaussians back to scene
-            total_gaussians = 0
-            for stamp in deformed_stamps:
-                self.scene.extend(stamp)
-                total_gaussians += len(stamp)
-
-            print(f"[Deformation] ✓ Deformation applied, {total_gaussians} Gaussians deformed")
+            print(f"[Deformation] ✓ Deformation applied, {len(deformed_stamps)} stamps deformed")
 
         # Phase 3-3: Apply inpainting
         if enable_inpainting and len(self.placed_stamps) > 1:
-            print(f"[Inpainting] Applying inpainting to {len(self.placed_stamps)} stamps")
+            mode_str = "global" if global_inpainting else "consecutive"
+            print(f"[Inpainting] Applying {mode_str} inpainting to {len(self.placed_stamps)} stamps (strength={blend_strength:.2f})")
 
-            # Extract just the gaussians from placed_stamps (now tuples)
-            stamps_only = [gaussians for gaussians, _ in self.placed_stamps]
+            from backend.config import config
+            from .inpainting import blend_overlapping_stamps_auto
+            overlap_threshold = config.INPAINT_OVERLAP_THRESHOLD
+            use_anisotropic = config.INPAINT_ANISOTROPIC if hasattr(config, 'INPAINT_ANISOTROPIC') else False
 
-            # Apply blending to overlapping regions
-            # Note: This modifies Gaussians in placed_stamps in-place
-            # If deformation was applied, the deformed stamps are already in the scene
-            # We need to work with the stamps that are currently in the scene
-
-            if enable_deformation:
-                # Deformation was applied, so we need to extract stamps from scene again
-                # This is a bit tricky - we'll blend the deformed stamps directly
-                # by reconstructing them from the scene
-
-                # For now, we'll skip inpainting after deformation
-                # because the stamps are already flattened into the scene
-                print(f"[Inpainting] ⚠ Inpainting after deformation not fully supported yet")
-                print(f"[Inpainting]    Applying simplified blending to scene Gaussians")
-
-                # Apply simple opacity reduction to all stroke Gaussians
-                stroke_gaussians = self.scene[self.current_stroke_start_index:]
-                for g in stroke_gaussians:
-                    g.opacity *= 0.9  # Slightly reduce opacity for better blending
-
+            if enable_deformation and len(deformed_stamps) > 0:
+                # Deformation was applied - blend deformed_stamps before adding to scene
+                print(f"[Inpainting] Blending deformed stamps (mode={blend_mode}, color={color_blending}, anisotropic={use_anisotropic})")
+                blend_overlapping_stamps_auto(deformed_stamps, overlap_threshold, blend_strength,
+                                            global_inpainting, blend_mode, color_blending, use_anisotropic)
+                stamps_to_add = deformed_stamps
             else:
                 # No deformation - blend the placed_stamps directly
-                from backend.config import config
-                overlap_threshold = config.INPAINT_OVERLAP_THRESHOLD
-                blend_overlapping_stamps(stamps_only, overlap_threshold)
+                stamps_only = [gaussians for gaussians, _ in self.placed_stamps]
+                blend_overlapping_stamps_auto(stamps_only, overlap_threshold, blend_strength,
+                                            global_inpainting, blend_mode, color_blending, use_anisotropic)
+                stamps_to_add = stamps_only
 
             print(f"[Inpainting] ✓ Inpainting applied")
+        elif enable_deformation and len(deformed_stamps) > 0:
+            # Deformation without inpainting - just use deformed stamps
+            stamps_to_add = deformed_stamps
+        else:
+            # No deformation, no inpainting - nothing to add (stamps already in scene from rigid placement)
+            stamps_to_add = []
+
+        # Add processed stamps to scene
+        if len(stamps_to_add) > 0:
+            total_gaussians = 0
+            for stamp in stamps_to_add:
+                self.scene.extend(stamp)
+                total_gaussians += len(stamp)
+            print(f"[Stroke] Added {total_gaussians} Gaussians to scene")
 
         # Reset
         self.current_stroke = None

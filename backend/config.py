@@ -29,6 +29,11 @@ class Config:
     ENABLE_DEFORMATION: bool = True
     ENABLE_INPAINTING: bool = False
     INPAINT_OVERLAP_THRESHOLD: float = 0.1  # Distance threshold for overlap detection
+    INPAINT_BLEND_STRENGTH: float = 0.3  # Opacity reduction strength (0.0-1.0)
+    INPAINT_GLOBAL_MODE: bool = False  # Blend all overlapping pairs (not just consecutive)
+    INPAINT_BLEND_MODE: str = 'smoothstep'  # Blending falloff: 'linear', 'smoothstep', 'gaussian'
+    INPAINT_COLOR_BLENDING: bool = True  # Enable color blending for smoother transitions
+    INPAINT_ANISOTROPIC: bool = True  # Use anisotropic (elliptical) distance for overlap detection
 
     # Spline settings
     SPLINE_POINT_THRESHOLD: float = 0.02  # Minimum distance between points
