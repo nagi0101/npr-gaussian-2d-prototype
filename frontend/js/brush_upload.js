@@ -188,7 +188,7 @@ class BrushUploadHandler {
             upload_id: this.currentUploadId,
             depth_profile: this.depthProfile.value,
             depth_scale: parseFloat(this.depthScale.value),
-            optimization_steps: 500, // Enable optimization with preview feedback
+            optimization_steps: 1000, // Enable optimization with preview feedback
         });
     }
 

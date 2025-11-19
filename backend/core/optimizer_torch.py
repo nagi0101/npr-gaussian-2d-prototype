@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import List, Callable, Optional
+from typing import List, Callable, Optional, Tuple
 import logging
 
 try:
@@ -36,6 +36,7 @@ class TorchGaussianOptimizer:
         target_image: np.ndarray,
         renderer,
         alpha_mask: Optional[np.ndarray] = None,
+        target_alpha: Optional[np.ndarray] = None,
         device: Optional[str] = None
     ):
         """
@@ -46,6 +47,7 @@ class TorchGaussianOptimizer:
             target_image: Target image (H, W, 3) in range [0, 1]
             renderer: Renderer instance (must have viewmat and K tensors)
             alpha_mask: Optional alpha mask (H, W) in range [0, 1] for masked loss
+            target_alpha: Optional target alpha channel (H, W) in range [0, 1] for alpha loss
             device: 'cuda' or 'cpu', auto-detect if None
         """
         # Device selection
@@ -118,6 +120,15 @@ class TorchGaussianOptimizer:
             self.alpha_mask = ((luminance > 0.05) & (luminance < 0.95)).float()
             logger.info(f"[TorchOptimizer] Created alpha mask from non-background pixels (coverage: {self.alpha_mask.mean():.1%})")
 
+        # Convert target alpha to tensor if provided (for alpha channel learning)
+        if target_alpha is not None:
+            self.target_alpha = torch.tensor(target_alpha, device=self.device, dtype=torch.float32)
+            logger.info(f"[TorchOptimizer] Using explicit target alpha (coverage: {self.target_alpha.mean():.1%})")
+        else:
+            # Fallback: use alpha_mask as target alpha
+            self.target_alpha = self.alpha_mask.clone()
+            logger.info(f"[TorchOptimizer] Using alpha mask as target alpha (fallback)")
+
         # Get camera matrices from renderer (already torch tensors on device)
         if hasattr(renderer, 'viewmat') and hasattr(renderer, 'K'):
             self.viewmat = renderer.viewmat  # [1, 4, 4]
@@ -187,14 +198,14 @@ class TorchGaussianOptimizer:
             device=self.device,
         ).unsqueeze(0)  # [1, 3, 3]
 
-    def _render_differentiable(self) -> torch.Tensor:
+    def _render_differentiable(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Render Gaussians using gsplat's differentiable CUDA rasterization.
 
         This is the standard 3DGS approach - let gsplat handle everything.
 
         Returns:
-            Rendered image [H, W, 3] in range [0, 1]
+            Tuple of (rendered_rgb [H, W, 3], rendered_alpha [H, W]) in range [0, 1]
         """
         # Call gsplat's differentiable rasterization directly
         # This uses optimized CUDA kernels with automatic gradient support
@@ -216,8 +227,13 @@ class TorchGaussianOptimizer:
             render_mode="RGB",
         )
 
-        # Extract image from batch [1, H, W, 3] -> [H, W, 3]
-        return render_colors[0]
+        # Extract RGB and alpha from batch
+        # render_colors: [1, H, W, 3] -> [H, W, 3]
+        # render_alphas: [1, H, W, 1] -> [H, W]
+        rendered_rgb = render_colors[0]
+        rendered_alpha = render_alphas[0].squeeze(-1)
+
+        return rendered_rgb, rendered_alpha
 
     def _compute_ssim_torch(
         self, img1: torch.Tensor, img2: torch.Tensor, window_size: int = 11
@@ -313,36 +329,39 @@ class TorchGaussianOptimizer:
         for iter_idx in range(iterations):
             optimizer.zero_grad()
 
-            # Render with gsplat's differentiable CUDA kernels
-            rendered = self._render_differentiable()
+            # Render RGB and alpha with gsplat's differentiable CUDA kernels
+            rendered_rgb, rendered_alpha = self._render_differentiable()
 
-            # Apply alpha mask to compute loss only in stroke regions
+            # Apply alpha mask to compute RGB loss only in stroke regions
             mask_3d = self.alpha_mask.unsqueeze(-1).expand(-1, -1, 3)  # Expand to RGB channels
-            masked_rendered = rendered * mask_3d
-            masked_target = self.target * mask_3d
+            masked_rendered_rgb = rendered_rgb * mask_3d
+            masked_target_rgb = self.target * mask_3d
 
             # Normalize by valid pixels to avoid bias
             valid_pixels = self.alpha_mask.sum()
             total_pixels = self.height * self.width
 
-            # Compute losses only in masked regions
+            # Compute RGB losses only in masked regions
             if valid_pixels > 0:
-                l1_loss = F.l1_loss(masked_rendered, masked_target) * (total_pixels / valid_pixels)
+                l1_rgb = F.l1_loss(masked_rendered_rgb, masked_target_rgb) * (total_pixels / valid_pixels)
                 # For SSIM, use full images but weight by mask coverage
-                ssim_value = self._compute_ssim_torch(rendered, self.target)
+                ssim_value = self._compute_ssim_torch(rendered_rgb, self.target)
                 ssim_loss = (1.0 - ssim_value) * (valid_pixels / total_pixels)
             else:
-                l1_loss = F.l1_loss(rendered, self.target)
-                ssim_value = self._compute_ssim_torch(rendered, self.target)
+                l1_rgb = F.l1_loss(rendered_rgb, self.target)
+                ssim_value = self._compute_ssim_torch(rendered_rgb, self.target)
                 ssim_loss = 1.0 - ssim_value
+
+            # Alpha loss (applied EVERYWHERE - background AND foreground)
+            # Background learns alpha=0 (transparent), strokes learn alpha=1 (opaque)
+            l1_alpha = F.l1_loss(rendered_alpha, self.target_alpha)
 
             # Regularization terms
             scale_reg = torch.mean((self.scales[:, :2] - 0.02) ** 2) * 0.01  # Only x,y scales
-            # L1 sparsity regularization for opacity (encourages low opacity in background)
-            opacity_reg = torch.mean(self.opacities) * 0.02  # Increased weight for stronger sparsity
 
-            # Total loss
-            total_loss = 0.7 * l1_loss + 0.2 * ssim_loss + scale_reg + opacity_reg
+            # Total loss with alpha channel learning
+            # RGB: 0.4, Alpha: 0.4, SSIM: 0.15, Scale regularization: 0.01
+            total_loss = 0.4 * l1_rgb + 0.4 * l1_alpha + 0.15 * ssim_loss + scale_reg
 
             # Backpropagation (gradients flow through CUDA kernels automatically)
             total_loss.backward()
@@ -377,15 +396,15 @@ class TorchGaussianOptimizer:
             # Progress callback
             if progress_callback and iter_idx % 1 == 0:
                 with torch.no_grad():
-                    rendered_np = rendered.cpu().numpy()
+                    rendered_np = rendered_rgb.cpu().numpy()
                     progress_callback(iter_idx, iterations, total_loss.item(), rendered_np)
 
             # Logging
             if iter_idx % 5 == 0:
                 logger.info(
                     f"[TorchOptimizer] Iter {iter_idx}/{iterations}: "
-                    f"Loss={total_loss.item():.4f} (L1={l1_loss.item():.4f}, "
-                    f"SSIM={ssim_loss.item():.4f})"
+                    f"Loss={total_loss.item():.4f} (RGB={l1_rgb.item():.4f}, "
+                    f"Alpha={l1_alpha.item():.4f}, SSIM={ssim_loss.item():.4f})"
                 )
 
             # Early stopping

@@ -1250,8 +1250,18 @@ class BrushConverter:
         # Extract target dimensions and alpha
         if len(target_image.shape) == 3 and target_image.shape[2] == 4:  # RGBA (H, W, 4)
             h, w = target_image.shape[:2]
+
+            # Extract alpha channel and normalize to [0, 1]
+            target_alpha = target_image[:, :, 3]
+            if target_alpha.max() > 1.0:
+                target_alpha = target_alpha / 255.0
+
+            # Extract raw RGB (NO compositing - alpha will be learned separately)
             target_rgb = target_image[:, :, :3]
-            target_alpha = target_image[:, :, 3] / 255.0
+            if target_rgb.max() > 1.0:
+                target_rgb = target_rgb / 255.0
+
+            logger.info(f"[Optimization] Using RGBA target (alpha coverage: {target_alpha.mean():.1%})")
         elif len(target_image.shape) == 3:  # RGB (H, W, 3)
             h, w = target_image.shape[:2]
             target_rgb = target_image
@@ -1261,12 +1271,72 @@ class BrushConverter:
             target_rgb = np.stack([target_image] * 3, axis=-1)
             target_alpha = None
 
+        # Store original dimensions for pruning later
+        original_h, original_w = h, w
+        original_x_range, original_y_range = None, None
+
+        # Apply padding if enabled (for better boundary optimization)
+        if hasattr(self.config.optimization, 'padding') and self.config.optimization.padding.enabled:
+            padding_percent = self.config.optimization.padding.percentage
+            min_pad = self.config.optimization.padding.min_pixels
+            max_pad = self.config.optimization.padding.max_pixels
+            bg_fill = self.config.optimization.padding.background_fill
+
+            # Compute padding in pixels
+            pad_h = int(h * padding_percent)
+            pad_w = int(w * padding_percent)
+
+            # Clamp to min/max
+            pad_h = max(min_pad, min(max_pad, pad_h))
+            pad_w = max(min_pad, min(max_pad, pad_w))
+
+            # Determine fill value
+            if bg_fill == "white":
+                fill_value = 1.0 if target_rgb.max() <= 1.0 else 255.0
+            elif bg_fill == "black":
+                fill_value = 0.0
+            else:  # "extend"
+                fill_value = None
+
+            # Pad target RGB
+            if fill_value is not None:
+                target_rgb = np.pad(
+                    target_rgb,
+                    ((pad_h, pad_h), (pad_w, pad_w), (0, 0)),
+                    mode='constant',
+                    constant_values=fill_value
+                )
+            else:
+                target_rgb = np.pad(
+                    target_rgb,
+                    ((pad_h, pad_h), (pad_w, pad_w), (0, 0)),
+                    mode='edge'
+                )
+
+            # Pad alpha if exists (with zeros = transparent background)
+            if target_alpha is not None:
+                target_alpha = np.pad(
+                    target_alpha,
+                    ((pad_h, pad_h), (pad_w, pad_w)),
+                    mode='constant',
+                    constant_values=0.0
+                )
+
+            # Update dimensions
+            h, w = target_rgb.shape[:2]
+
+            logger.info(
+                f"[Optimization] Applied {padding_percent*100:.0f}% padding: "
+                f"{original_h}x{original_w} → {h}x{w} "
+                f"(+{pad_h}px vertical, +{pad_w}px horizontal)"
+            )
+        else:
+            logger.info("[Optimization] Padding disabled")
+
         # Initialize renderer
         renderer = Renderer(width=w, height=h)
 
-        # Use target image bounds for optimization (not Gaussian bbox)
-        # This ensures all Gaussians have corresponding target pixels
-        h, w = target_image.shape[:2]
+        # Compute world bounds from current (possibly padded) dimensions
         aspect = w / h
         target_world_size = 0.5  # Same as in point cloud generation
 
@@ -1277,9 +1347,24 @@ class BrushConverter:
             x_range = target_world_size * aspect
             y_range = target_world_size
 
-        # Set world bounds to match target image exactly
+        # Set world bounds to match current (possibly padded) target image
         world_min = np.array([-x_range, -y_range])
         world_max = np.array([x_range, y_range])
+
+        # Store original (unpadded) world bounds for pruning later
+        if hasattr(self.config.optimization, 'padding') and self.config.optimization.padding.enabled:
+            original_aspect = original_w / original_h
+            if original_w > original_h:
+                original_x_range = target_world_size
+                original_y_range = target_world_size / original_aspect
+            else:
+                original_x_range = target_world_size * original_aspect
+                original_y_range = target_world_size
+            logger.info(
+                f"[Optimization] Original bounds: "
+                f"[{-original_x_range:.3f}, {original_x_range:.3f}] x "
+                f"[{-original_y_range:.3f}, {original_y_range:.3f}]"
+            )
 
         # Filter Gaussians to only those within target bounds
         filtered_gaussians = []
@@ -1342,22 +1427,22 @@ class BrushConverter:
 
             logger.info("[Optimization] Attempting PyTorch autograd optimizer (GPU-accelerated)")
 
-            # Extract alpha mask for loss computation
-            if target_image.shape[-1] == 4:
-                # Use alpha channel if available
-                target_alpha_mask = target_image[:, :, 3] / 255.0 if target_image.max() > 1.0 else target_image[:, :, 3]
-                target_alpha_mask = (target_alpha_mask > 0.5).astype(np.float32)
+            # Extract alpha mask for loss computation (use padded alpha if available)
+            if target_alpha is not None:
+                # Use padded alpha channel (already processed above)
+                target_alpha_mask = (target_alpha > 0.5).astype(np.float32)
             else:
                 # Create mask from non-background pixels (works for both white and black backgrounds)
                 target_gray = cv2.cvtColor(target_rgb.astype(np.uint8) if target_rgb.max() <= 1.0 else (target_rgb / 255.0 * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
                 target_alpha_mask = cv2.threshold(target_gray, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1].astype(np.float32)
 
-            # Create PyTorch optimizer with alpha mask
+            # Create PyTorch optimizer with alpha mask and alpha channel
             torch_optimizer = TorchGaussianOptimizer(
                 gaussians=gaussians,
                 target_image=target_rgb if target_rgb.max() <= 1.0 else target_rgb / 255.0,
                 renderer=renderer,
-                alpha_mask=target_alpha_mask
+                alpha_mask=target_alpha_mask,
+                target_alpha=target_alpha  # Pass alpha channel for alpha loss
             )
 
             # Progress callback wrapper for PyTorch optimizer
@@ -1419,9 +1504,32 @@ class BrushConverter:
             if len(culled_gaussians) < len(optimized_gaussians):
                 logger.info(f"[Optimization] Culled {len(optimized_gaussians) - len(culled_gaussians)} low-opacity Gaussians (< {opacity_threshold})")
 
-            logger.info(f"[Optimization] Returning {len(culled_gaussians)} optimized Gaussians")
+            # Prune out-of-bounds Gaussians if padding was used
+            final_gaussians = culled_gaussians
+            if (hasattr(self.config.optimization, 'padding') and
+                self.config.optimization.padding.enabled and
+                original_x_range is not None):
 
-            return culled_gaussians
+                pruned_gaussians = []
+                for g in culled_gaussians:
+                    pos = g.position[:2]
+                    # Keep only Gaussians within original (unpadded) bounds
+                    if (-original_x_range <= pos[0] <= original_x_range and
+                        -original_y_range <= pos[1] <= original_y_range):
+                        pruned_gaussians.append(g)
+
+                num_pruned = len(culled_gaussians) - len(pruned_gaussians)
+                if num_pruned > 0:
+                    logger.info(
+                        f"[Optimization] Pruned {num_pruned} out-of-bounds Gaussians "
+                        f"({num_pruned/len(culled_gaussians)*100:.1f}% of total)"
+                    )
+
+                final_gaussians = pruned_gaussians
+
+            logger.info(f"[Optimization] Returning {len(final_gaussians)} optimized Gaussians")
+
+            return final_gaussians
 
         except ImportError as e:
             logger.warning(f"[Optimization] PyTorch optimizer not available ({e}), falling back to finite differences")

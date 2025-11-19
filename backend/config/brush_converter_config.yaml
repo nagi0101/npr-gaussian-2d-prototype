@@ -79,10 +79,18 @@ optimization:
     ssim_weight: 0.2
     reg_weight: 0.1
 
+    # Padding for boundary optimization
+    padding:
+        enabled: true # Enable padding-based optimization for better boundary handling
+        percentage: 0.2 # Padding as percentage of image dimensions (20% = 0.2)
+        min_pixels: 10 # Minimum padding in pixels (for small images)
+        max_pixels: 200 # Maximum padding in pixels (for large images)
+        background_fill: "white" # Background fill for padding: "white", "black", or "extend"
+
     # Debug visualization settings
     debug:
         enabled: true # Save debug visualizations during optimization
-        save_interval: 20 # Save every N iterations (1 = every iteration)
+        save_interval: 500 # Save every N iterations (1 = every iteration)
         output_dir: "debug_output" # Directory for debug images
 
 # Visualization Settings

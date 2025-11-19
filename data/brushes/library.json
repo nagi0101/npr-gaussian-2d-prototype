@@ -46,29 +46,5 @@
     "tags": [],
     "thumbnail_path": null,
     "file_path": "brushes/brush_4d2abad4-1b5e-4f5e-b960-d80edf97cd91.json"
-  },
-  "98ba48ce-c62d-4538-9146-a636fe2c76b8": {
-    "id": "98ba48ce-c62d-4538-9146-a636fe2c76b8",
-    "name": "brush_4bf9e42f",
-    "type": "converted",
-    "source": "image",
-    "created_at": "2025-11-18T16:07:08.930812",
-    "modified_at": "2025-11-18T16:07:08.930855",
-    "gaussian_count": 800,
-    "tags": [],
-    "thumbnail_path": null,
-    "file_path": "brushes/brush_98ba48ce-c62d-4538-9146-a636fe2c76b8.json"
-  },
-  "65066ece-62e6-4555-88cf-ab524a5dab03": {
-    "id": "65066ece-62e6-4555-88cf-ab524a5dab03",
-    "name": "brush_6da44d06",
-    "type": "converted",
-    "source": "image",
-    "created_at": "2025-11-18T16:23:38.856212",
-    "modified_at": "2025-11-18T16:23:38.856245",
-    "gaussian_count": 800,
-    "tags": [],
-    "thumbnail_path": null,
-    "file_path": "brushes/brush_65066ece-62e6-4555-88cf-ab524a5dab03.json"
   }
 }
