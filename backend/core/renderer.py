@@ -43,6 +43,9 @@ class GaussianRenderer2D:
         self.world_min = np.array([-1.0, -1.0])
         self.world_max = np.array([1.0, 1.0])
 
+        # Compute uniform scale and offset for aspect ratio preservation
+        self._compute_scale_and_offset()
+
         # Debug mode
         self.debug_mode = debug_mode
         self.debug_visualizer = None
@@ -63,14 +66,37 @@ class GaussianRenderer2D:
         self.world_min = np.array(world_min, dtype=np.float32)
         self.world_max = np.array(world_max, dtype=np.float32)
 
+        # Recompute scale and offset with new bounds
+        self._compute_scale_and_offset()
+
         # Update debug visualizer bounds if exists
         if self.debug_visualizer:
             self.debug_visualizer.world_min = self.world_min
             self.debug_visualizer.world_max = self.world_max
 
+    def _compute_scale_and_offset(self):
+        """
+        Compute uniform scale and offset to preserve aspect ratio.
+        Uses letterboxing if world and pixel aspect ratios don't match.
+        """
+        world_width = self.world_max[0] - self.world_min[0]
+        world_height = self.world_max[1] - self.world_min[1]
+
+        # Use uniform scale (smaller of the two) to preserve aspect ratio
+        scale_x = self.width / world_width
+        scale_y = self.height / world_height
+        self.uniform_scale = min(scale_x, scale_y)
+
+        # Compute offset to center content
+        scaled_world_width = world_width * self.uniform_scale
+        scaled_world_height = world_height * self.uniform_scale
+
+        self.offset_x = (self.width - scaled_world_width) / 2.0
+        self.offset_y = (self.height - scaled_world_height) / 2.0
+
     def world_to_pixel(self, world_pos: np.ndarray) -> np.ndarray:
         """
-        World 좌표를 픽셀 좌표로 변환
+        World 좌표를 픽셀 좌표로 변환 (uniform scaling, aspect ratio preserved)
 
         Args:
             world_pos: (x, y) in world space
@@ -78,12 +104,9 @@ class GaussianRenderer2D:
         Returns:
             (px, py) in pixel space
         """
-        world_size = self.world_max - self.world_min
-        normalized = (world_pos - self.world_min) / world_size
-
-        # Y축 뒤집기 (screen space는 top-left origin)
-        px = normalized[0] * self.width
-        py = (1.0 - normalized[1]) * self.height
+        # Translate to origin, scale uniformly, then offset to center
+        px = (world_pos[0] - self.world_min[0]) * self.uniform_scale + self.offset_x
+        py = (self.world_max[1] - world_pos[1]) * self.uniform_scale + self.offset_y  # Y flip
 
         return np.array([px, py])
 
@@ -185,10 +208,8 @@ class GaussianRenderer2D:
         cov_world = gaussian.compute_covariance_2d()
 
         # World space covariance → Pixel space covariance
-        # 스케일 factor 계산
-        scale_x = self.width / (self.world_max[0] - self.world_min[0])
-        scale_y = self.height / (self.world_max[1] - self.world_min[1])
-        scale_matrix = np.diag([scale_x, scale_y])
+        # Use uniform scale to preserve aspect ratio
+        scale_matrix = np.diag([self.uniform_scale, self.uniform_scale])
 
         cov_pixel = scale_matrix @ cov_world @ scale_matrix.T
 

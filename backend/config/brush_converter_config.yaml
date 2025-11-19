@@ -79,6 +79,12 @@ optimization:
     ssim_weight: 0.2
     reg_weight: 0.1
 
+    # Debug visualization settings
+    debug:
+        enabled: true # Save debug visualizations during optimization
+        save_interval: 20 # Save every N iterations (1 = every iteration)
+        output_dir: "debug_output" # Directory for debug images
+
 # Visualization Settings
 visualization:
     figure_size: [20, 12] # Figure size in inches

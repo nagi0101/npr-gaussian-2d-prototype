@@ -435,6 +435,7 @@ class PaintingSession:
         image_data = data.get('image_data')
         depth_profile = data.get('depth_profile', 'flat')  # Default to flat for 2D brush images
         depth_scale = data.get('depth_scale', 0.2)
+        optimization_steps = data.get('optimization_steps', 0)  # Default to no optimization
 
         # Check if we have either upload_id or direct image_data
         if not upload_id and not image_data:
@@ -511,6 +512,44 @@ class PaintingSession:
             # Convert to 3DGS brush (run in thread pool)
             loop = asyncio.get_event_loop()
             brush_name = f"brush_{upload_id[:8]}" if upload_id else "direct_brush"
+            # Create progress callback that sends updates via WebSocket
+            import asyncio
+
+            def progress_callback(update_data):
+                """Callback to send progress updates from optimization thread"""
+                try:
+                    # Debug logging
+                    print(f"[Progress Callback] Called with iteration {update_data.get('iteration')}/{update_data.get('total_iterations')}")
+
+                    # Create message data
+                    msg = {
+                        'type': 'conversion_progress',
+                        'upload_id': upload_id,
+                        'progress': update_data.get('progress', 50),
+                        'status': update_data.get('status', 'Optimizing...'),
+                        'iteration': update_data.get('iteration'),
+                        'total_iterations': update_data.get('total_iterations'),
+                        'loss': update_data.get('loss')
+                    }
+
+                    # If rendered image provided, add it (this is the actual optimized image!)
+                    if 'rendered_image' in update_data and update_data['rendered_image']:
+                        msg['rendered_image'] = update_data['rendered_image']
+                        print(f"[Progress Callback] Adding rendered_image (base64)")
+                    else:
+                        print(f"[Progress Callback] No rendered_image in update_data")
+
+                    # Schedule the coroutine in the main event loop
+                    asyncio.run_coroutine_threadsafe(
+                        self.send_message(msg),
+                        loop
+                    )
+                    print(f"[Progress Callback] Message sent successfully")
+                except Exception as e:
+                    print(f"[Progress Callback] Error: {e}")
+                    import traceback
+                    traceback.print_exc()
+
             brush_stamp = await loop.run_in_executor(
                 None,
                 converter.convert_2d_to_3dgs,
@@ -518,7 +557,8 @@ class PaintingSession:
                 brush_name,
                 depth_profile,
                 depth_scale,
-                20  # No optimization for now
+                optimization_steps,
+                progress_callback if optimization_steps > 0 else None
             )
 
             # Update progress

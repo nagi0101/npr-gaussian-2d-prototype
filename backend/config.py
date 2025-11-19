@@ -35,6 +35,11 @@ class Config:
     INPAINT_COLOR_BLENDING: bool = True  # Enable color blending for smoother transitions
     INPAINT_ANISOTROPIC: bool = True  # Use anisotropic (elliptical) distance for overlap detection
 
+    # Optimization debug settings
+    DEBUG_OPTIMIZATION: bool = True  # Save debug visualizations during optimization
+    DEBUG_SAVE_INTERVAL: int = 1  # Save debug image every N iterations (1 = every iteration)
+    DEBUG_OUTPUT_DIR: str = "debug_output"  # Directory for debug output files
+
     # Spline settings
     SPLINE_POINT_THRESHOLD: float = 0.02  # Minimum distance between points
 

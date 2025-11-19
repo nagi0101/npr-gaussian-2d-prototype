@@ -58,6 +58,9 @@ class GaussianRenderer2D_GPU:
         self.world_min = torch.tensor([-1.0, -1.0], dtype=torch.float32, device=self.device)
         self.world_max = torch.tensor([1.0, 1.0], dtype=torch.float32, device=self.device)
 
+        # Compute uniform scale and offset for aspect ratio preservation
+        self._compute_scale_and_offset()
+
         # Pre-allocate GPU buffers for reuse
         self.image_buffer = torch.ones(
             (height, width, 3), dtype=torch.float32, device=self.device
@@ -71,13 +74,38 @@ class GaussianRenderer2D_GPU:
         self.world_min = torch.tensor(world_min, dtype=torch.float32, device=self.device)
         self.world_max = torch.tensor(world_max, dtype=torch.float32, device=self.device)
 
-    def world_to_pixel(self, world_pos: np.ndarray) -> np.ndarray:
-        """World coordinates to pixel coordinates (CPU)"""
-        world_size = self.world_max.cpu().numpy() - self.world_min.cpu().numpy()
-        normalized = (world_pos - self.world_min.cpu().numpy()) / world_size
+        # Recompute scale and offset with new bounds
+        self._compute_scale_and_offset()
 
-        px = normalized[0] * self.width
-        py = (1.0 - normalized[1]) * self.height
+    def _compute_scale_and_offset(self):
+        """
+        Compute uniform scale and offset to preserve aspect ratio.
+        Uses letterboxing if world and pixel aspect ratios don't match.
+        """
+        world_size = self.world_max - self.world_min
+        world_width = world_size[0].item()
+        world_height = world_size[1].item()
+
+        # Use uniform scale (smaller of the two) to preserve aspect ratio
+        scale_x = self.width / world_width
+        scale_y = self.height / world_height
+        self.uniform_scale = min(scale_x, scale_y)
+
+        # Compute offset to center content
+        scaled_world_width = world_width * self.uniform_scale
+        scaled_world_height = world_height * self.uniform_scale
+
+        self.offset_x = (self.width - scaled_world_width) / 2.0
+        self.offset_y = (self.height - scaled_world_height) / 2.0
+
+    def world_to_pixel(self, world_pos: np.ndarray) -> np.ndarray:
+        """World coordinates to pixel coordinates (CPU, uniform scaling)"""
+        world_min_np = self.world_min.cpu().numpy()
+        world_max_np = self.world_max.cpu().numpy()
+
+        # Translate to origin, scale uniformly, then offset to center
+        px = (world_pos[0] - world_min_np[0]) * self.uniform_scale + self.offset_x
+        py = (world_max_np[1] - world_pos[1]) * self.uniform_scale + self.offset_y  # Y flip
 
         return np.array([px, py])
 
@@ -175,19 +203,14 @@ class GaussianRenderer2D_GPU:
         # Compute covariances in batch
         cov_2d = self._batch_compute_covariances_gpu(positions, scales, rotations)  # [N, 2, 2]
 
-        # World to pixel transformation
-        scale_x = self.width / (self.world_max[0] - self.world_min[0])
-        scale_y = self.height / (self.world_max[1] - self.world_min[1])
-
-        # Convert positions to pixel space
+        # Convert positions to pixel space (uniform scaling to preserve aspect ratio)
         positions_2d = positions[:, :2]  # [N, 2]
-        normalized = (positions_2d - self.world_min) / (self.world_max - self.world_min)
-        pixel_positions = torch.zeros_like(normalized)
-        pixel_positions[:, 0] = normalized[:, 0] * self.width
-        pixel_positions[:, 1] = (1.0 - normalized[:, 1]) * self.height
+        pixel_positions = torch.zeros_like(positions_2d)
+        pixel_positions[:, 0] = (positions_2d[:, 0] - self.world_min[0]) * self.uniform_scale + self.offset_x
+        pixel_positions[:, 1] = (self.world_max[1] - positions_2d[:, 1]) * self.uniform_scale + self.offset_y
 
-        # Scale covariances to pixel space
-        scale_matrix = torch.diag(torch.tensor([scale_x, scale_y], device=self.device))
+        # Scale covariances to pixel space (uniform scaling)
+        scale_matrix = torch.diag(torch.tensor([self.uniform_scale, self.uniform_scale], device=self.device))
         cov_pixel = torch.einsum('ij,njk,kl->nil', scale_matrix, cov_2d, scale_matrix)  # [N, 2, 2]
 
         # Compute inverse covariances (batch)

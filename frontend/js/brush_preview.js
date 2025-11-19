@@ -14,58 +14,59 @@ class BrushPreview {
 
     setupPreviewCanvas() {
         // Create canvas element
-        this.canvas = document.createElement('canvas');
+        this.canvas = document.createElement("canvas");
         this.canvas.width = 150;
         this.canvas.height = 150;
-        this.canvas.style.border = '1px solid #ddd';
-        this.canvas.style.borderRadius = '8px';
-        this.canvas.style.backgroundColor = '#f9f9f9';
-        this.canvas.style.margin = '10px auto';
-        this.canvas.style.display = 'block';
-        this.canvas.id = 'brushPreviewCanvas';
+        this.canvas.style.border = "1px solid #ddd";
+        this.canvas.style.borderRadius = "8px";
+        this.canvas.style.backgroundColor = "#f9f9f9";
+        this.canvas.style.margin = "10px auto";
+        this.canvas.style.display = "block";
+        this.canvas.id = "brushPreviewCanvas";
 
-        this.ctx = this.canvas.getContext('2d');
+        this.ctx = this.canvas.getContext("2d");
 
         // Find or create preview container
-        let container = document.getElementById('brushPreviewContainer');
+        let container = document.getElementById("brushPreviewContainer");
         if (!container) {
             // Create container and add to UI
-            container = document.createElement('div');
-            container.id = 'brushPreviewContainer';
-            container.style.padding = '10px';
-            container.style.backgroundColor = 'white';
-            container.style.borderRadius = '8px';
-            container.style.marginTop = '10px';
-            container.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+            container = document.createElement("div");
+            container.id = "brushPreviewContainer";
+            container.style.padding = "10px";
+            container.style.backgroundColor = "white";
+            container.style.borderRadius = "8px";
+            container.style.marginTop = "10px";
+            container.style.boxShadow = "0 2px 4px rgba(0,0,0,0.1)";
 
             // Add title
-            const title = document.createElement('h4');
-            title.textContent = 'Current Brush Preview';
-            title.style.margin = '0 0 10px 0';
-            title.style.textAlign = 'center';
-            title.style.fontSize = '14px';
-            title.style.color = '#333';
+            const title = document.createElement("h4");
+            title.textContent = "Current Brush Preview";
+            title.style.margin = "0 0 10px 0";
+            title.style.textAlign = "center";
+            title.style.fontSize = "14px";
+            title.style.color = "#333";
             container.appendChild(title);
 
             // Add canvas
             container.appendChild(this.canvas);
 
             // Add info div
-            const infoDiv = document.createElement('div');
-            infoDiv.id = 'brushPreviewInfo';
-            infoDiv.style.textAlign = 'center';
-            infoDiv.style.fontSize = '12px';
-            infoDiv.style.color = '#666';
-            infoDiv.style.marginTop = '8px';
+            const infoDiv = document.createElement("div");
+            infoDiv.id = "brushPreviewInfo";
+            infoDiv.style.textAlign = "center";
+            infoDiv.style.fontSize = "12px";
+            infoDiv.style.color = "#666";
+            infoDiv.style.marginTop = "8px";
             container.appendChild(infoDiv);
 
             // Try to insert into the UI
-            const uploadSection = document.querySelector('#uploadPreview')?.parentElement;
+            const uploadSection =
+                document.querySelector("#uploadPreview")?.parentElement;
             if (uploadSection) {
                 uploadSection.appendChild(container);
             } else {
                 // Fallback: add to control panel
-                const controlPanel = document.getElementById('control-panel');
+                const controlPanel = document.getElementById("control-panel");
                 if (controlPanel) {
                     controlPanel.appendChild(container);
                 }
@@ -76,7 +77,11 @@ class BrushPreview {
     }
 
     updatePreview(brushData) {
-        if (!brushData || !brushData.gaussians || brushData.gaussians.length === 0) {
+        if (
+            !brushData ||
+            !brushData.gaussians ||
+            brushData.gaussians.length === 0
+        ) {
             this.clearPreview();
             return;
         }
@@ -87,13 +92,13 @@ class BrushPreview {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
         // Draw background
-        this.ctx.fillStyle = '#ffffff';
+        this.ctx.fillStyle = "#ffffff";
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
         // Visualize Gaussians as colored dots
         const centerX = this.canvas.width / 2;
         const centerY = this.canvas.height / 2;
-        const scale = 40; // Scale factor to fit brush in preview
+        const scale = 100; // Scale factor to fit brush in preview (increased for better visibility)
 
         // Sort by Z for proper depth rendering
         const sortedGaussians = [...brushData.gaussians].sort((a, b) => {
@@ -101,7 +106,7 @@ class BrushPreview {
         });
 
         // Draw each Gaussian
-        sortedGaussians.forEach(gaussian => {
+        sortedGaussians.forEach((gaussian) => {
             if (!gaussian.position || !gaussian.color) return;
 
             // Project to 2D (simple orthographic projection)
@@ -115,7 +120,10 @@ class BrushPreview {
             const opacity = gaussian.opacity || 0.8;
 
             // Draw as circle
-            const radius = Math.max(1, (gaussian.scale?.[0] || 0.05) * scale * 0.5);
+            const radius = Math.max(
+                1,
+                (gaussian.scale?.[0] || 0.05) * scale * 0.5
+            );
 
             this.ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
             this.ctx.beginPath();
@@ -128,17 +136,74 @@ class BrushPreview {
 
         // Show container
         if (this.container) {
-            this.container.style.display = 'block';
+            this.container.style.display = "block";
+        }
+    }
+
+    updatePreviewWithImage(base64Image, iteration, total, loss) {
+        if (!base64Image) return;
+
+        // Load and draw the base64 image onto canvas
+        const img = new Image();
+        img.onload = () => {
+            // Clear canvas
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+            // Calculate scaling to fit the canvas while maintaining aspect ratio
+            const scale = Math.min(
+                this.canvas.width / img.width,
+                this.canvas.height / img.height
+            );
+
+            const width = img.width * scale;
+            const height = img.height * scale;
+            const x = (this.canvas.width - width) / 2;
+            const y = (this.canvas.height - height) / 2;
+
+            // Draw white background
+            this.ctx.fillStyle = "#ffffff";
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+            // Draw image
+            this.ctx.drawImage(img, x, y, width, height);
+
+            console.log("[BrushPreview] Rendered optimization image:", {
+                iteration,
+                total,
+                loss,
+            });
+        };
+
+        img.onerror = (error) => {
+            console.error("[BrushPreview] Failed to load image:", error);
+        };
+
+        img.src = base64Image;
+
+        // Update info with iteration details
+        const infoDiv = document.getElementById("brushPreviewInfo");
+        if (infoDiv && iteration !== undefined && total !== undefined) {
+            infoDiv.innerHTML = `
+                <div><strong>Optimizing...</strong></div>
+                <div>Iteration: ${iteration}/${total}${
+                loss !== undefined ? ` | Loss: ${loss.toFixed(4)}` : ""
+            }</div>
+            `;
+        }
+
+        // Show container
+        if (this.container) {
+            this.container.style.display = "block";
         }
     }
 
     updateInfo(brushData) {
-        const infoDiv = document.getElementById('brushPreviewInfo');
+        const infoDiv = document.getElementById("brushPreviewInfo");
         if (!infoDiv) return;
 
         const gaussianCount = brushData.gaussians?.length || 0;
-        const brushName = brushData.metadata?.name || 'Converted Brush';
-        const brushSize = brushData.size?.toFixed(3) || 'N/A';
+        const brushName = brushData.metadata?.name || "Converted Brush";
+        const brushSize = brushData.size?.toFixed(3) || "N/A";
 
         infoDiv.innerHTML = `
             <div><strong>${brushName}</strong></div>
@@ -149,31 +214,36 @@ class BrushPreview {
     clearPreview() {
         if (this.ctx) {
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            this.ctx.fillStyle = '#f9f9f9';
+            this.ctx.fillStyle = "#f9f9f9";
             this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
             // Draw placeholder text
-            this.ctx.fillStyle = '#ccc';
-            this.ctx.font = '12px Arial';
-            this.ctx.textAlign = 'center';
-            this.ctx.fillText('No brush loaded', this.canvas.width / 2, this.canvas.height / 2);
+            this.ctx.fillStyle = "#ccc";
+            this.ctx.font = "12px Arial";
+            this.ctx.textAlign = "center";
+            this.ctx.fillText(
+                "No brush loaded",
+                this.canvas.width / 2,
+                this.canvas.height / 2
+            );
         }
 
-        const infoDiv = document.getElementById('brushPreviewInfo');
+        const infoDiv = document.getElementById("brushPreviewInfo");
         if (infoDiv) {
-            infoDiv.innerHTML = '<div style="color: #999;">No brush selected</div>';
+            infoDiv.innerHTML =
+                '<div style="color: #999;">No brush selected</div>';
         }
     }
 
     hide() {
         if (this.container) {
-            this.container.style.display = 'none';
+            this.container.style.display = "none";
         }
     }
 
     show() {
         if (this.container) {
-            this.container.style.display = 'block';
+            this.container.style.display = "block";
         }
     }
 }

@@ -21,6 +21,8 @@ import matplotlib.patches as mpatches
 from omegaconf import OmegaConf, DictConfig
 import os
 from datetime import datetime
+import contextlib
+import traceback
 
 from .gaussian import Gaussian2D
 from .brush import BrushStamp
@@ -115,6 +117,7 @@ class BrushConverter:
         depth_profile: str = "convex",
         depth_scale: float = 0.2,
         optimization_steps: int = 0,  # Disabled for initial implementation
+        progress_callback=None,  # Optional callback for progress updates
     ) -> BrushStamp:
         """
         Main conversion pipeline: 2D image → 3DGS brush
@@ -176,7 +179,7 @@ class BrushConverter:
 
         # Step 7: Appearance optimization (if requested)
         if optimization_steps > 0:
-            gaussians = self._optimize_appearance(gaussians, image, optimization_steps)
+            gaussians = self._optimize_appearance(gaussians, image, optimization_steps, progress_callback)
 
         # Step 8: Create BrushStamp
         brush = self._create_brush_stamp(gaussians, brush_name)
@@ -983,8 +986,202 @@ class BrushConverter:
 
         return float(np.mean(ssim_map))
 
+    def _align_to_target(
+        self, gaussians: List[Gaussian2D], target_image: np.ndarray, renderer
+    ) -> List[Gaussian2D]:
+        """
+        Align Gaussians to target image using center-of-mass and bounding box matching.
+        This provides initial spatial alignment before fine-tuning with optimization.
+
+        Args:
+            gaussians: List of Gaussians to align
+            target_image: Target image (H, W, 3) or (H, W, 4) in range [0, 255]
+            renderer: Renderer instance for coordinate transformations
+
+        Returns:
+            Aligned Gaussians (modified in-place, also returned for convenience)
+        """
+        if len(gaussians) == 0:
+            return gaussians
+
+        # Extract RGB and alpha from target
+        if len(target_image.shape) == 3 and target_image.shape[2] == 4:
+            target_rgb = target_image[:, :, :3].astype(np.float32) / 255.0
+            target_alpha = target_image[:, :, 3].astype(np.float32) / 255.0
+        elif len(target_image.shape) == 3:
+            target_rgb = target_image.astype(np.float32) / 255.0
+            target_alpha = np.ones(target_image.shape[:2], dtype=np.float32)
+        else:
+            target_rgb = np.stack([target_image] * 3, axis=-1).astype(np.float32) / 255.0
+            target_alpha = np.ones(target_image.shape, dtype=np.float32)
+
+        h, w = target_rgb.shape[:2]
+
+        # 1. Compute target center of mass (weighted by luminance * alpha)
+        luminance = 0.299 * target_rgb[:, :, 0] + 0.587 * target_rgb[:, :, 1] + 0.114 * target_rgb[:, :, 2]
+        weight = luminance * target_alpha
+        weight = weight / (np.sum(weight) + 1e-8)
+
+        y_coords, x_coords = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+        target_com_x = np.sum(x_coords * weight)
+        target_com_y = np.sum(y_coords * weight)
+
+        # Convert pixel coordinates to world coordinates using renderer
+        target_com_world = renderer.pixel_to_world(np.array([target_com_x, target_com_y]))
+        target_com_x_norm = target_com_world[0]
+        target_com_y_norm = target_com_world[1]
+
+        # 2. Compute Gaussian center of mass
+        positions = np.array([g.position[:2] for g in gaussians])
+        gaussian_com = np.mean(positions, axis=0)
+
+        # 3. Compute translation offset
+        offset = np.array([target_com_x_norm, target_com_y_norm]) - gaussian_com
+
+        logger.info(
+            f"[Alignment] Target CoM: ({target_com_x_norm:.3f}, {target_com_y_norm:.3f}), "
+            f"Gaussian CoM: ({gaussian_com[0]:.3f}, {gaussian_com[1]:.3f}), "
+            f"Offset: ({offset[0]:.3f}, {offset[1]:.3f})"
+        )
+
+        # Apply translation
+        for g in gaussians:
+            g.position[0] += offset[0]
+            g.position[1] += offset[1]
+
+        # 4. Compute bounding boxes for scale matching
+        # Target bbox (in world coords using renderer)
+        mask = (weight > np.percentile(weight[weight > 0], 10)).astype(np.float32)
+        if np.sum(mask) > 0:
+            y_indices, x_indices = np.where(mask > 0)
+
+            # Convert pixel bbox to world coords
+            target_min_pixel = np.array([np.min(x_indices), np.min(y_indices)])
+            target_max_pixel = np.array([np.max(x_indices), np.max(y_indices)])
+
+            target_min_world = renderer.pixel_to_world(target_min_pixel)
+            target_max_world = renderer.pixel_to_world(target_max_pixel)
+
+            target_width = target_max_world[0] - target_min_world[0]
+            target_height = abs(target_max_world[1] - target_min_world[1])  # abs() because Y might be flipped
+
+            # Gaussian bbox
+            positions = np.array([g.position[:2] for g in gaussians])
+            gaussian_min = np.min(positions, axis=0)
+            gaussian_max = np.max(positions, axis=0)
+            gaussian_width = gaussian_max[0] - gaussian_min[0]
+            gaussian_height = gaussian_max[1] - gaussian_min[1]
+
+            # Compute scale factor (use smaller dimension to avoid over-scaling)
+            if gaussian_width > 0 and gaussian_height > 0:
+                scale_x = target_width / gaussian_width
+                scale_y = target_height / gaussian_height
+                scale_factor = min(scale_x, scale_y)  # Use actual scale, no safety factor needed
+
+                logger.info(
+                    f"[Alignment] Target size: ({target_width:.3f}, {target_height:.3f}), "
+                    f"Gaussian size: ({gaussian_width:.3f}, {gaussian_height:.3f}), "
+                    f"Scale factor: {scale_factor:.3f}"
+                )
+
+                # Apply scale (relative to new center of mass)
+                new_com = np.array([target_com_x_norm, target_com_y_norm])
+                for g in gaussians:
+                    # Translate to origin, scale, translate back
+                    relative_pos = g.position[:2] - new_com
+                    g.position[0] = new_com[0] + relative_pos[0] * scale_factor
+                    g.position[1] = new_com[1] + relative_pos[1] * scale_factor
+
+                    # Scale the Gaussian size as well
+                    g.scale[0] *= scale_factor
+                    g.scale[1] *= scale_factor
+            else:
+                logger.warning("[Alignment] Gaussian bbox has zero size, skipping scale adjustment")
+        else:
+            logger.warning("[Alignment] Target mask is empty, skipping scale adjustment")
+
+        logger.info("[Alignment] Completed initial alignment")
+        return gaussians
+
+    def _save_optimization_debug(
+        self,
+        target_img: np.ndarray,
+        rendered_img: np.ndarray,
+        iteration: int,
+        total_iterations: int,
+        loss: float,
+        learning_rate: float,
+        gaussian_count: int,
+        session_dir: Path
+    ):
+        """
+        Save debug visualization of optimization progress with subplots.
+
+        Args:
+            target_img: Target image (H, W, 3), range [0, 1]
+            rendered_img: Rendered image (H, W, 3), range [0, 1]
+            iteration: Current iteration number
+            total_iterations: Total iterations
+            loss: Current loss value
+            learning_rate: Current learning rate
+            gaussian_count: Number of Gaussians
+            session_dir: Directory to save debug images
+        """
+        try:
+            # Create figure with 3 subplots
+            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+            fig.suptitle(f'Optimization Progress - Iteration {iteration}/{total_iterations}', fontsize=14, fontweight='bold')
+
+            # Convert images to uint8 for display
+            target_uint8 = (np.clip(target_img, 0, 1) * 255).astype(np.uint8)
+            rendered_uint8 = (np.clip(rendered_img, 0, 1) * 255).astype(np.uint8)
+
+            # Compute absolute difference
+            diff = np.abs(target_img - rendered_img)
+            diff_uint8 = (diff * 255).astype(np.uint8)
+
+            # 1. Target image
+            axes[0].imshow(target_uint8)
+            axes[0].set_title('Target Image', fontsize=12, fontweight='bold')
+            axes[0].axis('off')
+
+            # 2. Rendered image
+            axes[1].imshow(rendered_uint8)
+            axes[1].set_title('Rendered Image', fontsize=12, fontweight='bold')
+            axes[1].axis('off')
+
+            # 3. Difference heatmap
+            diff_gray = np.mean(diff_uint8, axis=2)
+            im = axes[2].imshow(diff_gray, cmap='hot', vmin=0, vmax=255)
+            axes[2].set_title('Error Heatmap', fontsize=12, fontweight='bold')
+            axes[2].axis('off')
+
+            # Add colorbar to heatmap
+            cbar = plt.colorbar(im, ax=axes[2], fraction=0.046, pad=0.04)
+            cbar.set_label('Error Magnitude', rotation=270, labelpad=15)
+
+            # Add info text below subplots
+            info_text = (
+                f'Loss: {loss:.6f}  |  '
+                f'Learning Rate: {learning_rate:.4f}  |  '
+                f'Gaussians: {gaussian_count}'
+            )
+            fig.text(0.5, 0.02, info_text, ha='center', fontsize=11,
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+            # Save figure
+            output_path = session_dir / f'iter_{iteration:04d}.png'
+            plt.tight_layout(rect=[0, 0.05, 1, 0.96])
+            plt.savefig(output_path, dpi=100, bbox_inches='tight')
+            plt.close(fig)
+
+            logger.debug(f"[Debug] Saved optimization visualization: {output_path}")
+
+        except Exception as e:
+            logger.warning(f"[Debug] Failed to save optimization debug image: {e}")
+
     def _optimize_appearance(
-        self, gaussians: List[Gaussian2D], target_image: np.ndarray, iterations: int
+        self, gaussians: List[Gaussian2D], target_image: np.ndarray, iterations: int, progress_callback=None
     ) -> List[Gaussian2D]:
         """
         Optimize Gaussian parameters to match target image using differentiable rendering.
@@ -1007,6 +1204,15 @@ class BrushConverter:
             f"[BrushConverter] Starting appearance optimization: {iterations} iterations"
         )
 
+        # Setup debug output directory if enabled
+        debug_session_dir = None
+        if self.config.optimization.debug.enabled:
+            debug_base_dir = Path(self.config.optimization.debug.output_dir)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            debug_session_dir = debug_base_dir / f"optimization_{timestamp}"
+            debug_session_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"[Debug] Saving optimization visualizations to: {debug_session_dir}")
+
         # Import renderer (lazy import to avoid circular dependency)
         try:
             from .renderer_gsplat import GaussianRenderer2D_GSplat as Renderer
@@ -1020,11 +1226,11 @@ class BrushConverter:
                 logger.info("[Optimization] Using CPU renderer")
 
         # Extract target dimensions and alpha
-        if len(target_image.shape) == 4:  # (H, W, 4)
+        if len(target_image.shape) == 3 and target_image.shape[2] == 4:  # RGBA (H, W, 4)
             h, w = target_image.shape[:2]
             target_rgb = target_image[:, :, :3]
             target_alpha = target_image[:, :, 3] / 255.0
-        elif len(target_image.shape) == 3:  # (H, W, 3)
+        elif len(target_image.shape) == 3:  # RGB (H, W, 3)
             h, w = target_image.shape[:2]
             target_rgb = target_image
             target_alpha = None
@@ -1035,6 +1241,61 @@ class BrushConverter:
 
         # Initialize renderer
         renderer = Renderer(width=w, height=h)
+
+        # Use target image bounds for optimization (not Gaussian bbox)
+        # This ensures all Gaussians have corresponding target pixels
+        h, w = target_image.shape[:2]
+        aspect = w / h
+        target_world_size = 0.5  # Same as in point cloud generation
+
+        if w > h:
+            x_range = target_world_size
+            y_range = target_world_size / aspect
+        else:
+            x_range = target_world_size * aspect
+            y_range = target_world_size
+
+        # Set world bounds to match target image exactly
+        world_min = np.array([-x_range, -y_range])
+        world_max = np.array([x_range, y_range])
+
+        # Filter Gaussians to only those within target bounds
+        filtered_gaussians = []
+        for g in gaussians:
+            pos = g.position[:2]
+            if -x_range <= pos[0] <= x_range and -y_range <= pos[1] <= y_range:
+                filtered_gaussians.append(g)
+
+        if len(filtered_gaussians) < len(gaussians):
+            logger.info(f"[Optimization] Filtered {len(gaussians)} → {len(filtered_gaussians)} Gaussians to target bounds")
+            gaussians = filtered_gaussians
+
+        # Set renderer bounds to match target image
+        renderer.set_world_bounds(world_min, world_max)
+
+        logger.info(
+            f"[Optimization] Set renderer world bounds: "
+            f"[{world_min[0]:.3f}, {world_max[0]:.3f}] x [{world_min[1]:.3f}, {world_max[1]:.3f}]"
+        )
+
+        # Validate aspect ratio match between target and world space
+        target_aspect = w / h
+        world_width = renderer.world_max[0] - renderer.world_min[0]
+        world_height = renderer.world_max[1] - renderer.world_min[1]
+        world_aspect = world_width / world_height
+
+        if abs(target_aspect - world_aspect) > 0.1:
+            logger.warning(
+                f"[Optimization] Aspect ratio mismatch detected! "
+                f"Target: {target_aspect:.2f} ({w}x{h}), "
+                f"World: {world_aspect:.2f}. "
+                f"Using uniform scaling with letterboxing to preserve aspect ratio."
+            )
+        else:
+            logger.info(
+                f"[Optimization] Aspect ratios match. "
+                f"Target: {target_aspect:.2f}, World: {world_aspect:.2f}"
+            )
 
         # Store initial parameters for regularization
         initial_opacities = [g.opacity for g in gaussians]
@@ -1048,11 +1309,103 @@ class BrushConverter:
         best_loss = float('inf')
         best_gaussians = [g.copy() for g in gaussians]
 
+        # Perform initial alignment to match target position and scale
+        logger.info("[Optimization] Performing initial alignment...")
+        gaussians = self._align_to_target(gaussians, target_image, renderer)
+        logger.info("[Optimization] Alignment complete, starting fine-tuning...")
+
+        # Try PyTorch autograd optimizer first (GPU-accelerated, multi-parameter)
+        try:
+            from .optimizer_torch import TorchGaussianOptimizer
+
+            logger.info("[Optimization] Attempting PyTorch autograd optimizer (GPU-accelerated)")
+
+            # Create PyTorch optimizer
+            torch_optimizer = TorchGaussianOptimizer(
+                gaussians=gaussians,
+                target_image=target_rgb if target_rgb.max() <= 1.0 else target_rgb / 255.0,
+                renderer=renderer
+            )
+
+            # Progress callback wrapper for PyTorch optimizer
+            def torch_progress_callback(iter_idx, total_iters, loss, rendered_np):
+                if progress_callback:
+                    # Calculate progress percentage
+                    optimization_progress = 40 + (40 * iter_idx / total_iters)
+
+                    # Encode rendered image to base64 for preview
+                    import base64
+                    import io
+                    from PIL import Image
+
+                    try:
+                        pil_img = Image.fromarray((rendered_np * 255).astype(np.uint8))
+                        buffer = io.BytesIO()
+                        pil_img.save(buffer, format='PNG')
+                        img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                        rendered_image = f"data:image/png;base64,{img_base64}"
+                    except Exception as e:
+                        logger.warning(f"[Optimization] Failed to encode image: {e}")
+                        rendered_image = None
+
+                    progress_callback({
+                        'progress': optimization_progress,
+                        'iteration': iter_idx,
+                        'total_iterations': total_iters,
+                        'loss': float(loss),
+                        'rendered_image': rendered_image,
+                        'status': f'Optimizing (PyTorch)... (iteration {iter_idx}/{total_iters})'
+                    })
+
+                # Save debug visualization
+                if debug_session_dir is not None:
+                    if (iter_idx + 1) % self.config.optimization.debug.save_interval == 0:
+                        self._save_optimization_debug(
+                            target_img=target_rgb if target_rgb.max() <= 1.0 else target_rgb / 255.0,
+                            rendered_img=rendered_np,
+                            iteration=iter_idx + 1,
+                            total_iterations=total_iters,
+                            loss=loss,
+                            learning_rate=0.01,  # Placeholder
+                            gaussian_count=len(gaussians),
+                            session_dir=debug_session_dir
+                        )
+
+            # Run PyTorch optimization
+            optimized_gaussians = torch_optimizer.optimize(
+                iterations=iterations,
+                progress_callback=torch_progress_callback
+            )
+
+            logger.info("[Optimization] PyTorch optimization completed successfully!")
+
+            # Cull low-opacity Gaussians to remove edge artifacts
+            opacity_threshold = 0.05
+            culled_gaussians = [g for g in optimized_gaussians if g.opacity > opacity_threshold]
+
+            if len(culled_gaussians) < len(optimized_gaussians):
+                logger.info(f"[Optimization] Culled {len(optimized_gaussians) - len(culled_gaussians)} low-opacity Gaussians (< {opacity_threshold})")
+
+            logger.info(f"[Optimization] Returning {len(culled_gaussians)} optimized Gaussians")
+
+            return culled_gaussians
+
+        except ImportError as e:
+            logger.warning(f"[Optimization] PyTorch optimizer not available ({e}), falling back to finite differences")
+        except Exception as e:
+            logger.warning(f"[Optimization] PyTorch optimization failed: {str(e)}")
+            logger.warning(f"[Optimization] Full traceback:\n{traceback.format_exc()}")
+            logger.warning("[Optimization] Falling back to finite differences")
+
+        # Fallback: Finite difference optimization (opacity only)
+        logger.info("[Optimization] Using finite difference optimizer (CPU, opacity only)")
+
         # Optimization loop
         for iter_idx in range(iterations):
-            # Render current state
+            # Render current state (suppress renderer stdout)
             try:
-                rendered_img = renderer.render(gaussians)
+                with contextlib.redirect_stdout(open(os.devnull, 'w')):
+                    rendered_img = renderer.render(gaussians)
             except Exception as e:
                 logger.warning(f"[Optimization] Render failed at iteration {iter_idx}: {e}")
                 break
@@ -1078,12 +1431,69 @@ class BrushConverter:
             # Total loss
             total_loss = l1_weight * l1_loss + ssim_weight * ssim_loss + reg_weight * reg_loss
 
+            # Save debug visualization if enabled
+            if debug_session_dir is not None:
+                if (iter_idx + 1) % self.config.optimization.debug.save_interval == 0:
+                    # Normalize target_rgb to [0, 1] if needed
+                    target_normalized = target_rgb.astype(np.float32)
+                    if target_normalized.max() > 1.0:
+                        target_normalized = target_normalized / 255.0
+
+                    self._save_optimization_debug(
+                        target_img=target_normalized,
+                        rendered_img=rendered_img,
+                        iteration=iter_idx + 1,
+                        total_iterations=iterations,
+                        loss=total_loss,
+                        learning_rate=learning_rate,
+                        gaussian_count=len(gaussians),
+                        session_dir=debug_session_dir
+                    )
+
             # Log progress
             if iter_idx % 20 == 0:
                 logger.info(
                     f"[Optimization] Iter {iter_idx}/{iterations}: "
                     f"Loss={total_loss:.4f} (L1={l1_loss:.4f}, SSIM={ssim_value:.3f}, Reg={reg_loss:.4f})"
                 )
+
+            # Send progress update via callback (every iteration for real-time feedback)
+            if progress_callback:
+                # Calculate progress percentage (40% to 80% during optimization)
+                optimization_progress = 40 + (40 * iter_idx / iterations)
+
+                # Encode rendered image to base64 for preview
+                import base64
+                import io
+                from PIL import Image
+
+                try:
+                    # Convert numpy array to PIL Image
+                    # rendered_img is (H, W, 3) in RGB format, range [0, 1]
+                    # Scale to [0, 255] before converting to uint8
+                    pil_img = Image.fromarray((rendered_img * 255).astype(np.uint8))
+
+                    # Encode to base64
+                    buffer = io.BytesIO()
+                    pil_img.save(buffer, format='PNG')
+                    img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                    rendered_image = f"data:image/png;base64,{img_base64}"
+                except Exception as e:
+                    logger.warning(f"[Optimization] Failed to encode rendered image: {e}")
+                    rendered_image = None
+
+                # Send progress update
+                try:
+                    progress_callback({
+                        'progress': optimization_progress,
+                        'iteration': iter_idx,
+                        'total_iterations': iterations,
+                        'loss': float(total_loss),
+                        'rendered_image': rendered_image,  # Send actual rendered image
+                        'status': f'Optimizing... (iteration {iter_idx}/{iterations})'
+                    })
+                except Exception as e:
+                    logger.warning(f"[Optimization] Failed to send progress update: {e}")
 
             # Save best
             if total_loss < best_loss:
@@ -1092,36 +1502,76 @@ class BrushConverter:
 
             # Simple opacity optimization using finite differences
             # (Full gradient descent would require differentiable renderer)
-            for i, g in enumerate(gaussians):
-                # Small perturbation to opacity
-                delta = 0.001
-                old_opacity = g.opacity
+            # Use gradient accumulation: compute all gradients first, then apply together
 
-                # Try increasing opacity
+            delta = 0.001
+            gradients = []
+            old_opacities = [g.opacity for g in gaussians]
+
+            # Phase 1: Compute all gradients (read-only)
+            for i, g in enumerate(gaussians):
+                old_opacity = old_opacities[i]
+
+                # Try increasing opacity (suppress renderer stdout)
                 g.opacity = np.clip(old_opacity + delta, 0.01, 1.0)
-                rendered_plus = renderer.render(gaussians)
+                with contextlib.redirect_stdout(open(os.devnull, 'w')):
+                    rendered_plus = renderer.render(gaussians)
                 loss_plus = np.mean(np.abs(rendered_plus.astype(np.float32) - target_rgb.astype(np.float32)))
 
-                # Try decreasing opacity
+                # Try decreasing opacity (suppress renderer stdout)
                 g.opacity = np.clip(old_opacity - delta, 0.01, 1.0)
-                rendered_minus = renderer.render(gaussians)
+                with contextlib.redirect_stdout(open(os.devnull, 'w')):
+                    rendered_minus = renderer.render(gaussians)
                 loss_minus = np.mean(np.abs(rendered_minus.astype(np.float32) - target_rgb.astype(np.float32)))
 
-                # Compute gradient
-                gradient = (loss_plus - loss_minus) / (2 * delta)
+                # Restore original opacity
+                g.opacity = old_opacity
 
-                # Update opacity
-                new_opacity = old_opacity - learning_rate * gradient
+                # Compute and store gradient
+                gradient = (loss_plus - loss_minus) / (2 * delta)
+                gradients.append(gradient)
+
+            # Phase 2: Apply all gradients together
+            for i, g in enumerate(gaussians):
+                new_opacity = old_opacities[i] - learning_rate * gradients[i]
                 g.opacity = np.clip(new_opacity, 0.01, 1.0)
+
+            # Log gradient statistics periodically
+            if iter_idx % 5 == 0:
+                grad_mean = np.mean(np.abs(gradients))
+                grad_max = np.max(np.abs(gradients))
+                opacity_changes = [abs(gaussians[i].opacity - old_opacities[i]) for i in range(len(gaussians))]
+                opacity_delta_mean = np.mean(opacity_changes)
+                opacity_delta_max = np.max(opacity_changes)
+                logger.info(
+                    f"[Optimization] Iter {iter_idx}: "
+                    f"Grad(μ={grad_mean:.6f}, max={grad_max:.6f}), "
+                    f"ΔOpacity(μ={opacity_delta_mean:.6f}, max={opacity_delta_max:.6f})"
+                )
 
             # Early stopping
             if total_loss < 0.05:  # Good enough
                 logger.info(f"[Optimization] Early stopping at iteration {iter_idx}, loss={total_loss:.4f}")
                 break
 
-        logger.info(f"[Optimization] Completed. Best loss: {best_loss:.4f}")
+        logger.info(f"[Optimization] Completed. Final loss: {total_loss:.4f}, Best loss: {best_loss:.4f}")
 
-        return best_gaussians
+        # Return the optimized gaussians (not the saved best from early iterations)
+        # If current is better, use it; otherwise use best saved
+        if total_loss < best_loss:
+            final_gaussians = gaussians
+        else:
+            final_gaussians = best_gaussians
+
+        # Cull low-opacity Gaussians to remove edge artifacts
+        opacity_threshold = 0.05
+        culled_gaussians = [g for g in final_gaussians if g.opacity > opacity_threshold]
+
+        if len(culled_gaussians) < len(final_gaussians):
+            logger.info(f"[Optimization] Culled {len(final_gaussians) - len(culled_gaussians)} low-opacity Gaussians (< {opacity_threshold})")
+
+        logger.info(f"[Optimization] Returning {len(culled_gaussians)} optimized Gaussians")
+        return culled_gaussians
 
     def _create_brush_stamp(
         self, gaussians: List[Gaussian2D], brush_name: str

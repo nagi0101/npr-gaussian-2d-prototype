@@ -88,6 +88,9 @@ class GaussianRenderer2D_GSplat:
             [1.0, 1.0], dtype=torch.float32, device=self.device
         )
 
+        # Compute uniform scale and offset for aspect ratio preservation
+        self._compute_scale_and_offset()
+
         # Setup orthographic camera
         self._setup_camera()
 
@@ -126,22 +129,38 @@ class GaussianRenderer2D_GSplat:
         # Maps world space [-1, 1] x [-1, 1] to pixel space [0, width] x [0, height]
         self.K = self._compute_ortho_projection()
 
+    def _compute_scale_and_offset(self):
+        """
+        Compute uniform scale and offset to preserve aspect ratio.
+        Uses letterboxing if world and pixel aspect ratios don't match.
+        """
+        world_size = self.world_max - self.world_min
+        world_width = world_size[0].item()
+        world_height = world_size[1].item()
+
+        # Use uniform scale (smaller of the two) to preserve aspect ratio
+        scale_x = self.width / world_width
+        scale_y = self.height / world_height
+        self.uniform_scale = min(scale_x, scale_y)
+
+        # Compute offset to center content
+        scaled_world_width = world_width * self.uniform_scale
+        scaled_world_height = world_height * self.uniform_scale
+
+        self.offset_x = (self.width - scaled_world_width) / 2.0
+        self.offset_y = (self.height - scaled_world_height) / 2.0
+
     def _compute_ortho_projection(self) -> torch.Tensor:
         """
-        Compute orthographic projection matrix
+        Compute orthographic projection matrix (uniform scaling to preserve aspect ratio)
 
         Returns:
             [1, 3, 3] projection matrix
         """
-        # World space dimensions
-        world_width = self.world_max[0] - self.world_min[0]
-        world_height = self.world_max[1] - self.world_min[1]
+        # Use uniform scale to preserve aspect ratio
+        fx = fy = self.uniform_scale
 
-        # Scale factors: world -> pixel
-        fx = self.width / world_width
-        fy = self.height / world_height
-
-        # Principal point (center of image)
+        # Principal point includes offset for centering
         cx = self.width / 2.0
         cy = self.height / 2.0
 
@@ -163,6 +182,9 @@ class GaussianRenderer2D_GSplat:
             world_max, dtype=torch.float32, device=self.device
         )
 
+        # Recompute scale and offset with new bounds
+        self._compute_scale_and_offset()
+
         # Recompute projection matrix
         self.K = self._compute_ortho_projection()
 
@@ -172,12 +194,13 @@ class GaussianRenderer2D_GSplat:
             self.debug_visualizer.world_max = world_max
 
     def world_to_pixel(self, world_pos: np.ndarray) -> np.ndarray:
-        """World coordinates to pixel coordinates (CPU)"""
-        world_size = self.world_max.cpu().numpy() - self.world_min.cpu().numpy()
-        normalized = (world_pos - self.world_min.cpu().numpy()) / world_size
+        """World coordinates to pixel coordinates (CPU, uniform scaling)"""
+        world_min_np = self.world_min.cpu().numpy()
+        world_max_np = self.world_max.cpu().numpy()
 
-        px = normalized[0] * self.width
-        py = (1.0 - normalized[1]) * self.height
+        # Translate to origin, scale uniformly, then offset to center
+        px = (world_pos[0] - world_min_np[0]) * self.uniform_scale + self.offset_x
+        py = (world_max_np[1] - world_pos[1]) * self.uniform_scale + self.offset_y  # Y flip
 
         return np.array([px, py])
 

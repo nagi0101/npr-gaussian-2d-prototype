@@ -33,7 +33,7 @@ class BrushSerializer:
                 'scale': g.scale.tolist() if hasattr(g.scale, 'tolist') else g.scale,
                 'rotation': g.rotation.tolist() if hasattr(g.rotation, 'tolist') else g.rotation,
                 'opacity': float(g.opacity),  # Pattern opacity preserved
-                'color': [0.5, 0.5, 0.5]  # Neutral color for patterns
+                'color': g.color.tolist() if hasattr(g.color, 'tolist') else g.color  # Preserve luminance texture
             })
 
         # Create brush data dictionary
@@ -70,7 +70,7 @@ class BrushSerializer:
                 scale=np.array(g_data['scale'], dtype=np.float32),
                 rotation=np.array(g_data['rotation'], dtype=np.float32),
                 opacity=g_data['opacity'],
-                color=np.array([0.5, 0.5, 0.5], dtype=np.float32)  # Neutral color for pattern
+                color=np.array(g_data.get('color', [0.5, 0.5, 0.5]), dtype=np.float32)  # Preserve luminance or use default
             )
             brush.base_gaussians.append(g)
 
