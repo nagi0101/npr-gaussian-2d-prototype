@@ -111,15 +111,19 @@ class GaussianRenderer2D_GPU:
 
     def pixel_to_world(self, pixel_pos: np.ndarray) -> np.ndarray:
         """Pixel coordinates to world coordinates (CPU)"""
-        normalized = np.array([
-            pixel_pos[0] / self.width,
-            1.0 - pixel_pos[1] / self.height
-        ])
+        world_min_np = self.world_min.cpu().numpy()
+        world_max_np = self.world_max.cpu().numpy()
 
-        world_size = self.world_max.cpu().numpy() - self.world_min.cpu().numpy()
-        world_pos = self.world_min.cpu().numpy() + normalized * world_size
+        # Inverse of world_to_pixel transformation
+        # 1. Remove offset
+        adjusted_x = pixel_pos[0] - self.offset_x
+        adjusted_y = pixel_pos[1] - self.offset_y
 
-        return world_pos
+        # 2. Scale back to world space (inverse uniform scale)
+        world_x = world_min_np[0] + adjusted_x / self.uniform_scale
+        world_y = world_max_np[1] - adjusted_y / self.uniform_scale  # Y flip
+
+        return np.array([world_x, world_y])
 
     def render(self, gaussians: List[Gaussian2D]) -> np.ndarray:
         """

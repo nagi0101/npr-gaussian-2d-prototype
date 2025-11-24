@@ -120,15 +120,16 @@ class GaussianRenderer2D:
         Returns:
             (x, y) in world space
         """
-        # Y축 뒤집기
-        normalized = np.array(
-            [pixel_pos[0] / self.width, 1.0 - pixel_pos[1] / self.height]
-        )
+        # Inverse of world_to_pixel transformation
+        # 1. Remove offset
+        adjusted_x = pixel_pos[0] - self.offset_x
+        adjusted_y = pixel_pos[1] - self.offset_y
 
-        world_size = self.world_max - self.world_min
-        world_pos = self.world_min + normalized * world_size
+        # 2. Scale back to world space (inverse uniform scale)
+        world_x = self.world_min[0] + adjusted_x / self.uniform_scale
+        world_y = self.world_max[1] - adjusted_y / self.uniform_scale  # Y flip
 
-        return world_pos
+        return np.array([world_x, world_y])
 
     def render(
         self, gaussians: List[Gaussian2D], spline_data: Optional[Dict[str, Any]] = None
